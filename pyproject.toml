@@ -1,0 +1,31 @@
+[project]
+name = "pygpubench"
+version = "0.0.1"
+description = "GPU kernel benchmarking utilities"
+#readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+    { name = "Erik Schultheis", email = "erik.schultheis@ist.ac.at" }
+]
+dependencies = [
+]
+
+[build-system]
+requires = ["scikit-build-core>=0.11", "nanobind"]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+wheel.py-api = "cp312"
+build.targets = ["_pygpubench"]
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "RelWithDebInfo"
+
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "csrc/*" },
+    { file = "python/*" },
+    { file = "CMakeLists.txt" }
+]
