@@ -136,24 +136,36 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         throw std::runtime_error("The initial speed test indicated that running times are too slow to generate meaningful benchmark numbers: " + std::to_string(time_estimate));
     }
 
-    mStartEvents.resize(actual_calls);
-    mEndEvents.resize(actual_calls);
-    for (int i = 0; i < actual_calls; i++) {
-        CUDA_CHECK(cudaEventCreate(&mStartEvents.at(i), cudaEventDisableTiming));
-        CUDA_CHECK(cudaEventCreate(&mEndEvents.at(i), cudaEventDisableTiming));
+    constexpr int DRY_EVENTS = 100;
+    const int num_events = std::max(actual_calls, DRY_EVENTS);
+    mStartEvents.resize(num_events);
+    mEndEvents.resize(num_events);
+    for (int i = 0; i < num_events; i++) {
+        CUDA_CHECK(cudaEventCreate(&mStartEvents.at(i)));
+        CUDA_CHECK(cudaEventCreate(&mEndEvents.at(i)));
     }
 
     CUDA_CHECK(cudaMemsetAsync(mDeviceErrorCounter, 0, sizeof(unsigned), stream));
 
-    // dry run
+    // dry run -- measure overhead of events
     nvtxRangePush("dry-run");
+    // ensure that the GPU is busy for a short moment, so we can submit all the events
+    // before the GPU reaches them
     clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
-    for (int i = 0; i < actual_calls; i++) {
+    for (int i = 0; i < DRY_EVENTS; i++) {
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
     }
     nvtxRangePop();
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<float> empty_event_times(DRY_EVENTS);
+    for (int i = 0; i < DRY_EVENTS; i++) {
+        CUDA_CHECK(cudaEventElapsedTime(empty_event_times.data() + i, mStartEvents.at(i), mEndEvents.at(i)));
+    }
+    std::sort(empty_event_times.begin(), empty_event_times.end());
+    float median = empty_event_times.at(empty_event_times.size() / 2);
+    mOutputFile << "event-overhead\t" << median * 1000 << " µs\n";
 
     nvtxRangePush("benchmark");
     // now do the real runs
@@ -187,14 +199,14 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     int error_count;
     CUDA_CHECK(cudaMemcpy(&error_count, mDeviceErrorCounter, sizeof(unsigned), cudaMemcpyDeviceToHost));
     if (error_count > 0) {
-        //throw std::runtime_error("Detected " + std::to_string(error_count) + " errors in the benchmark");
+        throw std::runtime_error("Detected " + std::to_string(error_count) + " errors in the benchmark");
     }
 
     // extract run times and write to output file
     for (int i = 0; i < actual_calls; i++) {
         float duration;
-        //CUDA_CHECK(cudaEventElapsedTime(&duration, mStartEvents.at(i), mEndEvents.at(i)));
-        //mOutputFile << (duration * 1000) << "\n";
+        CUDA_CHECK(cudaEventElapsedTime(&duration, mStartEvents.at(i), mEndEvents.at(i)));
+        mOutputFile << i << "\t" << (duration * 1000) << "\n";
     }
     mOutputFile.flush();
 
