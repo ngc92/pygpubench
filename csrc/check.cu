@@ -125,3 +125,28 @@ void check_check_approx_match_launcher(unsigned* result, const half* expected, c
     check_check_approx_match_launcher_tpl<half>(result, expected, received, r_tol, a_tol, size, stream);
 }
 
+__global__ void canaries_kernel(uint4* data, int size, unsigned seed) {
+    unsigned tg = threadIdx.x / 8;
+    unsigned idx = (blockIdx.x * blockDim.x + threadIdx.x) / 8;
+    unsigned rtg = tg ^ (seed & 0x1f); // "random" index  [0, 31]
+    unsigned lb = seed >> 5u;
+    // we pick 1 out of every 256 cache lines
+    unsigned cache_line = idx * 256 + (rtg * 48 + lb & 0x7);
+    unsigned addr = cache_line * 128 / sizeof(int4) + threadIdx.x % 8;
+    if (addr < size) {
+        uint4 load = data[addr];
+        // self-inverse transformation
+        load.x = load.x ^ seed;
+        load.y = ~load.y;
+        load.z = load.z ^ seed;
+        load.w = ~load.w;
+        data[addr] = load;
+    }
+}
+
+void canaries(void* data, size_t size, unsigned seed, cudaStream_t stream) {
+    int num_sectors = size / (128 * 256);
+    int block_size  = 256;
+    int num_blocks  = cuda::ceil_div(num_sectors, block_size / 8);
+    canaries_kernel<<<num_blocks, 256, 0, stream>>>(reinterpret_cast<uint4*>(data), size / sizeof(int4), seed);
+}

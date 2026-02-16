@@ -58,6 +58,52 @@ std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setu
     return std::make_pair(std::move(kernel_args), std::move(expected));
 }
 
+bool can_convert_to_tensor(nb::handle obj) {
+    return nb::isinstance<nb_cuda_array>(obj);
+}
+
+auto BenchmarkManager::make_shadow_args(const nb::tuple& args, cudaStream_t stream) -> std::vector<std::optional<ShadowArgument>> {
+    std::vector<std::optional<ShadowArgument>> shadow_args(args.size());
+    int nargs = args.size();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<unsigned> canary_seed_dist(0,  0xffffffff);
+    for (int i = 1; i < nargs; i++) {
+        if (can_convert_to_tensor(args[i])) {
+            nb_cuda_array arr = nb::cast<nb_cuda_array>(args[i]);
+            void* shadow;
+            CUDA_CHECK(cudaMalloc(&shadow, arr.nbytes()));
+            CUDA_CHECK(cudaMemcpyAsync(shadow, arr.data(), arr.nbytes(), cudaMemcpyDeviceToDevice, stream));
+            CUDA_CHECK(cudaMemsetAsync(arr.data(), 0xff, arr.nbytes(), stream));
+            unsigned seed = canary_seed_dist(gen);
+            shadow_args[i] = ShadowArgument{nb::cast<nb_cuda_array>(args[i]), shadow, seed};
+            canaries(shadow, arr.nbytes(), seed, stream);
+            //canaries(shadow, arr.nbytes(), seed, stream);
+        }
+    }
+    return shadow_args;
+}
+
+BenchmarkManager::ShadowArgument::ShadowArgument(nb_cuda_array original, void* shadow, unsigned seed) :
+    Original(std::move(original)), Shadow(shadow), Seed(seed) {
+}
+
+BenchmarkManager::ShadowArgument::~ShadowArgument() {
+    if (Shadow != nullptr)
+        cudaFree(Shadow);
+}
+
+BenchmarkManager::ShadowArgument::ShadowArgument(ShadowArgument&& other) noexcept :
+    Original(std::move(other.Original)), Shadow(std::exchange(other.Shadow, nullptr)), Seed(other.Seed) {
+}
+
+BenchmarkManager::ShadowArgument& BenchmarkManager::ShadowArgument::operator=(ShadowArgument&& other) noexcept {
+    Original = std::move(other.Original);
+    Shadow = std::exchange(other.Shadow, nullptr);
+    Seed = other.Seed;
+    return *this;
+}
+
 void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream) {
     if (args.size() < 5) {
         throw std::runtime_error("Not enough test cases to run benchmark");
@@ -74,6 +120,13 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     for (int i = 0; i < args.size(); i++) {
         outputs.at(i) = nb::cast<nb_cuda_array>(args.at(i)[0]);
     }
+
+    // Generate "shadow" copies of input arguments
+    std::vector<ShadowArgumentList> shadow_arguments;
+    for (const auto & arg : args) {
+        shadow_arguments.emplace_back(make_shadow_args(arg, stream));
+    }
+
     struct Expected {
         enum EMode {
             ExactMatch,
@@ -170,9 +223,28 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     nvtxRangePush("benchmark");
     // now do the real runs
     for (int i = 0; i < actual_calls; i++) {
+        // page-in real inputs. If the user kernel runs on the wrong stream, it's likely it won't see the correct inputs
+        // unfortunately, we need to do this before clearing the cache, so there is a window of opportunity
+        // *but* we deliberately modify a small subset of the inputs, which only get corrected immediately before
+        // the user code call.
+        for (auto& shadow_arg : shadow_arguments.at(i + 1)) {
+            if (shadow_arg) {
+                CUDA_CHECK(cudaMemcpyAsync(shadow_arg->Original.data(), shadow_arg->Shadow, shadow_arg->Original.nbytes(), cudaMemcpyDeviceToDevice, stream));
+            }
+        }
+
         nvtxRangePush("cc");
         clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
         nvtxRangePop();
+
+        // ok, now we revert the canaries. This _does_ bring in the corresponding cache lines,
+        // but they are very sparse (1/256), so that seems like an acceptable trade-off
+        for (auto& shadow_arg : shadow_arguments.at(i + 1)) {
+            if (shadow_arg) {
+                canaries(shadow_arg->Original.data(), shadow_arg->Original.nbytes(), shadow_arg->Seed, stream);
+            }
+        }
+
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         nvtxRangePush("kernel");
         kernel(args.at(i + 1));
@@ -199,6 +271,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     int error_count;
     CUDA_CHECK(cudaMemcpy(&error_count, mDeviceErrorCounter, sizeof(unsigned), cudaMemcpyDeviceToHost));
     if (error_count > 0) {
+        mOutputFile << "error-count\t" << error_count << "\n";
         throw std::runtime_error("Detected " + std::to_string(error_count) + " errors in the benchmark");
     }
 

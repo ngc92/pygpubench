@@ -9,9 +9,13 @@
 #include <chrono>
 #include <fstream>
 #include <cuda_runtime.h>
+#include <optional>
 #include <nanobind/nanobind.h>
+#include "nanobind/ndarray.h"
 
 namespace nb = nanobind;
+
+using nb_cuda_array = nb::ndarray<nb::c_contig, nb::device::cuda>;
 
 class BenchmarkManager {
 public:
@@ -33,6 +37,21 @@ private:
     unsigned* mDeviceErrorCounter;
 
     std::ofstream mOutputFile;
+
+
+    struct ShadowArgument {
+        nb_cuda_array Original;
+        void* Shadow = nullptr;
+        unsigned Seed = -1;
+        ShadowArgument(nb_cuda_array original, void* shadow, unsigned seed);
+        ~ShadowArgument();
+        ShadowArgument(ShadowArgument&& other) noexcept;
+        ShadowArgument& operator=(ShadowArgument&& other) noexcept;
+    };
+
+    using ShadowArgumentList = std::vector<std::optional<ShadowArgument>>;
+
+    static ShadowArgumentList make_shadow_args(const nb::tuple& args, cudaStream_t stream);
 };
 
 #endif //PYGPUBENCH_SRC_MANAGER_H

@@ -16,3 +16,6 @@ void check_exact_match_launcher(unsigned* result, const std::byte* expected, con
 void check_check_approx_match_launcher(unsigned* result, const float* expected, const float* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream);
 void check_check_approx_match_launcher(unsigned* result, const nv_bfloat16* expected, const nv_bfloat16* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream);
 void check_check_approx_match_launcher(unsigned* result, const half* expected, const half* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream);
+
+
+void canaries(void* data, size_t size, unsigned seed, cudaStream_t stream);
