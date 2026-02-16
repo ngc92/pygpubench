@@ -19,7 +19,7 @@ using nb_cuda_array = nb::ndarray<nb::c_contig, nb::device::cuda>;
 
 class BenchmarkManager {
 public:
-    BenchmarkManager(std::string result_file);
+    BenchmarkManager(std::string result_file, bool unlink);
     ~BenchmarkManager();
     std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats);
     void do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream);

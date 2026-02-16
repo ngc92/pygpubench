@@ -31,14 +31,15 @@ void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& ex
     }
 }
 
-BenchmarkManager::BenchmarkManager(std::string result_file) {
+BenchmarkManager::BenchmarkManager(std::string result_file, bool unlink) {
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
     CUDA_CHECK(cudaDeviceGetAttribute(&mL2CacheSize, cudaDevAttrL2CacheSize, device));
     CUDA_CHECK(cudaMalloc(&mDeviceDummyMemory, 2 * mL2CacheSize));
     CUDA_CHECK(cudaMalloc(&mDeviceErrorCounter, sizeof(unsigned)));
     mOutputFile.open(result_file);
-    //std::remove(result_file.c_str());
+    if (unlink)
+        std::remove(result_file.c_str());
 }
 
 BenchmarkManager::~BenchmarkManager() {
@@ -80,7 +81,6 @@ auto BenchmarkManager::make_shadow_args(const nb::tuple& args, cudaStream_t stre
             unsigned seed = canary_seed_dist(gen);
             shadow_args[i] = ShadowArgument{nb::cast<nb_cuda_array>(args[i]), shadow, seed};
             canaries(shadow, arr.nbytes(), seed, stream);
-            //canaries(shadow, arr.nbytes(), seed, stream);
         }
     }
     return shadow_args;
