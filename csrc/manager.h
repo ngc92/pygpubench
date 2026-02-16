@@ -35,9 +35,19 @@ private:
     int* mDeviceDummyMemory;
     int mL2CacheSize;
     unsigned* mDeviceErrorCounter;
+    bool mNVTXEnabled;
 
     std::ofstream mOutputFile;
 
+    struct Expected {
+        enum EMode {
+            ExactMatch,
+            ApproxMatch
+        } Mode;
+        nb_cuda_array Value;
+        float ATol;
+        float RTol;
+    };
 
     struct ShadowArgument {
         nb_cuda_array Original;
@@ -52,6 +62,11 @@ private:
     using ShadowArgumentList = std::vector<std::optional<ShadowArgument>>;
 
     static ShadowArgumentList make_shadow_args(const nb::tuple& args, cudaStream_t stream);
+
+    void nvtx_push(const char* name);
+    void nvtx_pop();
+
+    void validate_result(Expected& expected, const nb_cuda_array& result, cudaStream_t stream);
 };
 
 #endif //PYGPUBENCH_SRC_MANAGER_H

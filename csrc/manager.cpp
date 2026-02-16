@@ -86,6 +86,31 @@ auto BenchmarkManager::make_shadow_args(const nb::tuple& args, cudaStream_t stre
     return shadow_args;
 }
 
+void BenchmarkManager::nvtx_push(const char* name) {
+    if (mNVTXEnabled)
+        nvtxRangePush(name);
+}
+
+void BenchmarkManager::nvtx_pop() {
+    if (mNVTXEnabled)
+        nvtxRangePop();
+}
+
+void BenchmarkManager::validate_result(Expected& expected, const nb_cuda_array& result, cudaStream_t stream) {
+    if (expected.Mode == Expected::ExactMatch) {
+        check_exact_match_launcher(
+            mDeviceErrorCounter,
+            static_cast<std::byte*>(expected.Value.data()),
+            static_cast<std::byte*>(result.data()),
+            result.nbytes(), stream);
+    } else {
+        check_check_approx_match_dispatch(
+            mDeviceErrorCounter,
+            expected.Value, result,
+            expected.RTol, expected.ATol, result.nbytes(), stream);
+    }
+}
+
 BenchmarkManager::ShadowArgument::ShadowArgument(nb_cuda_array original, void* shadow, unsigned seed) :
     Original(std::move(original)), Shadow(shadow), Seed(seed) {
 }
@@ -129,15 +154,6 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         shadow_arguments.emplace_back(make_shadow_args(arg, stream));
     }
 
-    struct Expected {
-        enum EMode {
-            ExactMatch,
-            ApproxMatch
-        } Mode;
-        nb_cuda_array Value;
-        float ATol;
-        float RTol;
-    };
     std::vector<Expected> expected_outputs(args.size());
     for (int i = 0; i < args.size(); i++) {
         const nb::tuple& expected_tuple = expected.at(i);
@@ -167,17 +183,17 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     nb::callable kernel = nb::cast<nb::callable>(kernel_generator());
 
     // ok, first run for compilations etc
-    nvtxRangePush("warmup");
+    nvtx_push("warmup");
     CUDA_CHECK(cudaDeviceSynchronize());
     kernel(args.at(0));
     CUDA_CHECK(cudaDeviceSynchronize());
-    nvtxRangePop();
+    nvtx_pop();
 
     // now, run a few more times for warmup; in total aim for 1 second of warmup runs
     std::chrono::high_resolution_clock::time_point cpu_start = std::chrono::high_resolution_clock::now();
     int warmup_run_count = 0;
     double time_estimate;
-    nvtxRangePush("timing");
+    nvtx_push("timing");
     while (true) {
         // note: we are assuming here that calling the kernel multiple times for the same input is a safe operation
         // this is only potentially problematic for in-place kernels;
@@ -193,7 +209,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
             break;
         }
     }
-    nvtxRangePop();
+    nvtx_pop();
 
     // note: this is a very conservative estimate. Timing above was measured with syncs between every kernel.
     const int actual_calls = std::clamp(static_cast<int>(std::ceil(mBenchmarkSeconds / time_estimate)), 1, calls);
@@ -214,7 +230,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     CUDA_CHECK(cudaMemsetAsync(mDeviceErrorCounter, 0, sizeof(unsigned), stream));
 
     // dry run -- measure overhead of events
-    nvtxRangePush("dry-run");
+    nvtx_push("dry-run");
     // ensure that the GPU is busy for a short moment, so we can submit all the events
     // before the GPU reaches them
     clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
@@ -222,7 +238,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
     }
-    nvtxRangePop();
+    nvtx_pop();
     CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<float> empty_event_times(DRY_EVENTS);
@@ -233,7 +249,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     float median = empty_event_times.at(empty_event_times.size() / 2);
     mOutputFile << "event-overhead\t" << median * 1000 << " µs\n";
 
-    nvtxRangePush("benchmark");
+    nvtx_push("benchmark");
     // now do the real runs
     for (int i = 0; i < actual_calls; i++) {
         // page-in real inputs. If the user kernel runs on the wrong stream, it's likely it won't see the correct inputs
@@ -246,9 +262,9 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
             }
         }
 
-        nvtxRangePush("cc");
+        nvtx_push("cc");
         clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
-        nvtxRangePop();
+        nvtx_pop();
 
         // ok, now we revert the canaries. This _does_ bring in the corresponding cache lines,
         // but they are very sparse (1/256), so that seems like an acceptable trade-off
@@ -259,26 +275,15 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         }
 
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
-        nvtxRangePush("kernel");
+        nvtx_push("kernel");
         kernel(args.at(i + 1));
-        nvtxRangePop();
+        nvtx_pop();
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,
         // this increases the chance of detection.
-        if (expected_outputs.at(i + 1).Mode == Expected::ExactMatch) {
-            check_exact_match_launcher(
-                mDeviceErrorCounter,
-                static_cast<std::byte*>(expected_outputs.at(i + 1).Value.data()),
-                static_cast<std::byte*>(outputs.at(i + 1).data()),
-                outputs.at(i + 1).nbytes(), stream);
-        } else {
-            check_check_approx_match_dispatch(
-                mDeviceErrorCounter,
-                expected_outputs.at(i + 1).Value, outputs.at(i + 1),
-                expected_outputs.at(i + 1).RTol, expected_outputs.at(i + 1).ATol, outputs.at(i + 1).nbytes(), stream);
-        }
+        validate_result(expected_outputs.at(i + 1), outputs.at(i + 1), stream);
     }
-    nvtxRangePop();
+    nvtx_pop();
 
     cudaEventSynchronize(mEndEvents.back());
     int error_count;
