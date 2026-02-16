@@ -24,4 +24,3 @@ inline void cuda_throw_on_error(cudaError_t status, const char* statement, const
 }
 
 #define CUDA_CHECK(status) cuda_throw_on_error(status, #status, __FILE__, __LINE__)
-

@@ -31,13 +31,14 @@ void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& ex
     }
 }
 
-BenchmarkManager::BenchmarkManager(std::string result_file, bool unlink) {
+BenchmarkManager::BenchmarkManager(std::string result_file, bool unlink, bool nvtx) {
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
     CUDA_CHECK(cudaDeviceGetAttribute(&mL2CacheSize, cudaDevAttrL2CacheSize, device));
     CUDA_CHECK(cudaMalloc(&mDeviceDummyMemory, 2 * mL2CacheSize));
     CUDA_CHECK(cudaMalloc(&mDeviceErrorCounter, sizeof(unsigned)));
     mOutputFile.open(result_file);
+    mNVTXEnabled = nvtx;
     if (unlink)
         std::remove(result_file.c_str());
 }
