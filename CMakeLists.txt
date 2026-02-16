@@ -27,6 +27,9 @@ nanobind_add_module(_pygpubench
         csrc/check.cu
 )
 target_link_libraries(_pygpubench PUBLIC Python::Module CUDA::cudart)
+# set a bunch of hardening options to make it harder to tamper with the executable
+target_compile_options(_pygpubench PUBLIC -fPIC -pie -fstack-protector-strong -fcf-protection=full -ftrivial-auto-var-init=zero -Wl,-z,relro,-z,now )
+target_compile_definitions(_pygpubench PUBLIC -D_GLIBCXX_ASSERTIONS -D_FORTIFY_SOURCE=3)
 
 # make sure we pick up cuda libraries from within the current python env, if available
 set(RPATH_LIST

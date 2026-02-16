@@ -7,10 +7,12 @@
 #include "check.h"
 #include <chrono>
 #include <cuda_runtime.h>
+#include <optional>
+#include <random>
 #include <nvtx3/nvToolsExt.h>
 
-#include "nanobind/ndarray.h"
-using nb_cuda_array = nb::ndarray<nb::c_contig, nb::device::cuda>;
+#include <sys/prctl.h>
+
 
 void clear_cache(void* dummy_memory, int size, cudaStream_t stream);
 
@@ -151,6 +153,17 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
     // at this point, we call user code (`kernel_generator` is supposed to be the first place the user file is imported)
     // after this, we cannot trust python anymore
+
+    // Prevent ptrace and /proc/self/mem tampering
+    prctl(PR_SET_DUMPABLE, 0);
+    // Prevent gaining privileges (if attacker tries setuid exploits)
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    // no new executable code pages
+    // note: this also prevents thread creating, which breaks torch.compile
+    // workaround: run torch.compile once from trusted python code, then the thread already
+    //             exists at this point. does not seem reliable, so disabled for now
+    // prctl(PR_SET_MDWE, PR_MDWE_REFUSE_EXEC_GAIN, 0, 0, 0);
+
     nb::callable kernel = nb::cast<nb::callable>(kernel_generator());
 
     // ok, first run for compilations etc
