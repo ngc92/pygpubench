@@ -1,4 +1,9 @@
-from typing import Callable, Tuple
+import dataclasses
+import multiprocessing as mp
+import tempfile
+
+from pathlib import Path
+from typing import Callable, Tuple, Optional
 
 from . import _pygpubench
 
@@ -6,8 +11,8 @@ from . import _pygpubench
 KernelGeneratorInterface = Callable[[], Callable[[Tuple], None]]
 TestGeneratorInterface = Callable[[Tuple], Tuple[Tuple, Tuple]]
 
-def do_bench(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
-             test_args: tuple, repeats: int, stream: int = None, unlink: bool = False, nvtx: bool = False):
+def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
+                  test_args: tuple, repeats: int, stream: int = None, unlink: bool = False, nvtx: bool = False):
     """
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
@@ -19,7 +24,6 @@ def do_bench(out_file: str, kernel_generator: KernelGeneratorInterface, test_gen
     :param unlink: Whether to unlink the output file before calling `kernel_generator`. Unlinking makes it impossible to
     open the file again, protecting it against malicious kernels.
     :param nvtx: Whether to enable NVTX markers for the benchmark. Mostly useful for debugging.
-    :return:
     """
     assert repeats > 1
     if stream is None:
@@ -28,3 +32,70 @@ def do_bench(out_file: str, kernel_generator: KernelGeneratorInterface, test_gen
 
     _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, stream, unlink, nvtx)
 
+
+@dataclasses.dataclass
+class BenchmarkResult:
+    event_overhead_us: float
+    time_us: list[float]
+    errors: Optional[int]
+
+
+def basic_stats(time_us: list[float]):
+    fastest = min(time_us)
+    slowest = max(time_us)
+    median = sorted(time_us)[len(time_us) // 2]
+    mean = sum(time_us) / len(time_us)
+    std = sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us)
+    return fastest, slowest, median, mean, std
+
+def do_bench_isolated(
+        kernel_generator: KernelGeneratorInterface,
+        test_generator: TestGeneratorInterface,
+        test_args: tuple,
+        repeats: int,
+        stream: int = None,
+        nvtx: bool = False
+) -> BenchmarkResult:
+    """
+    Runs kernel benchmark (`do_bench_impl`) in a subprocess for proper isolation.
+    """
+    assert repeats > 1
+
+    # Create a named temporary file for the C++ extension to store the results in
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.tsv') as f:
+        result_file = f.name
+
+    try:
+        # open file before running subprocess; process will unlink
+        with open(result_file, 'r') as f:
+            # Spawn testing process
+            ctx = mp.get_context('spawn')
+            process = ctx.Process(
+                target=do_bench_impl,
+                args=(result_file, kernel_generator, test_generator,
+                      test_args, repeats, stream, True, nvtx)  # unlink=True
+            )
+
+            process.start()
+            process.join()
+
+            if process.exitcode != 0:
+                raise RuntimeError(f"Benchmark subprocess failed with exit code {process.exitcode}")
+
+            # Read results from file
+            results = BenchmarkResult(None, [None] * repeats, None)
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) == 2 and parts[0].isdigit():
+                    iteration = int(parts[0])
+                    time_us = float(parts[1])
+                    results.time_us[iteration] = time_us
+                elif parts[0] == "event-overhead":
+                    results.event_overhead_us = float(parts[1].split()[0])
+                elif parts[0] == "error-count":
+                    results.errors = int(parts[1])
+
+        return results
+
+    finally:
+        Path(result_file).unlink(missing_ok=True)
