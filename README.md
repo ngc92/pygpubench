@@ -19,5 +19,26 @@ Consequently, benchmark results are not returned to python, but instead written 
 name of this file is passed as an argument to the benchmarking function, and the file is unlinked
 before the user code is called, making it impossible to reopen this file.
 The `do_bench_isolated` function is designed to streamline this process: It automates creating
-the temporary file, spawning a new python process to handle the benchmarking, and reading the
+the temporary file, spawning a new python process to handle benchmarking and reading the
 results back into python (the original, untainted process).
+
+Thus, the library provides two main interfaces to benchmarking:
+`do_bench_impl` runs benchmarking directly in the current process,
+`do_bench_isolated` runs it in a separate process and automaticallly handles 
+I/O through a temporary file.
+
+Additional measures to mitigate benchmark cheating are that benchmark inputs are generated before any benchmark is run,
+but then moved to a GPU memory location unknown to `torch` (allocated directly with cudaMalloc in C++). Only before
+the actual kernel is launched do we copy the inputs back to their original locations. Problematically, this would put the
+inputs into L2 cache, which we want to avoid. This means that between the copy and the kernel launch, there has to be another
+kernel that clears the L2 cache, opening a window of opportunity for cheating. To minimize the duration of vulnerability,
+we put a small fraction of random canaries into the input data, that is, a subset of memory location contains wrong data.
+Only after L2 clearing do we fix up these values; this pulls them into L2 cache, but since they make up less than 1% of
+the total data, we consider this an acceptable tradeoff.
+
+Similarly, after the kernel is finished, we directly launch the testing kernel with a programmatically-dependent launch,
+again to minimize the window of opportunity for cheating by writing results from a different stream. This could have a
+small effect on performance, as during the tail of the user kernel blocks of the test kernel are already put on the SMs
+and generate memory traffic. In the checking kernel, the order in which blocks are checked is randomized, so that it is
+not a viable strategy to only write the later blocks of the result from an unsynchronized stream.
+
