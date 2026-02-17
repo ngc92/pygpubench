@@ -3,14 +3,11 @@ import multiprocessing as mp
 import tempfile
 
 from pathlib import Path
-from typing import Callable, Tuple, Optional
+from typing import Optional
 
 from . import _pygpubench
+from ._types import *
 
-
-KernelFunction = Callable[[Tuple], None]
-KernelGeneratorInterface = Callable[[], KernelFunction]
-TestGeneratorInterface = Callable[[Tuple, int], Tuple[Tuple, Tuple]]
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
                   test_args: tuple, repeats: int, seed: int, stream: int = None, discard: bool = True,
