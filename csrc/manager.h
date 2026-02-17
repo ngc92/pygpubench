@@ -19,7 +19,7 @@ using nb_cuda_array = nb::ndarray<nb::c_contig, nb::device::cuda>;
 
 class BenchmarkManager {
 public:
-    BenchmarkManager(std::string result_file, bool unlink, bool nvtx);
+    BenchmarkManager(std::string result_file, bool discard, bool unlink, bool nvtx);
     ~BenchmarkManager();
     std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats);
     void do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream);
@@ -35,7 +35,8 @@ private:
     int* mDeviceDummyMemory;
     int mL2CacheSize;
     unsigned* mDeviceErrorCounter;
-    bool mNVTXEnabled;
+    bool mNVTXEnabled = false;
+    bool mDiscardCache = true;
 
     std::ofstream mOutputFile;
 
@@ -67,6 +68,7 @@ private:
     void nvtx_pop();
 
     void validate_result(Expected& expected, const nb_cuda_array& result, cudaStream_t stream);
+    void clear_cache(cudaStream_t stream);
 };
 
 #endif //PYGPUBENCH_SRC_MANAGER_H

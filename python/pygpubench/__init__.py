@@ -12,7 +12,7 @@ KernelGeneratorInterface = Callable[[], Callable[[Tuple], None]]
 TestGeneratorInterface = Callable[[Tuple], Tuple[Tuple, Tuple]]
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
-                  test_args: tuple, repeats: int, stream: int = None, unlink: bool = False, nvtx: bool = False):
+                  test_args: tuple, repeats: int, stream: int = None, discard: bool = True, unlink: bool = False, nvtx: bool = False):
     """
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
@@ -21,6 +21,7 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
     :param test_args: arguments to be passed to `test_generator`
     :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeat` times.
     :param stream: Cuda stream on which to run the benchmark. If not give, torch's current stream is selected
+    :param discard: If true, then cache lines are discarded as part of cache clearing before each benchmark run.
     :param unlink: Whether to unlink the output file before calling `kernel_generator`. Unlinking makes it impossible to
     open the file again, protecting it against malicious kernels.
     :param nvtx: Whether to enable NVTX markers for the benchmark. Mostly useful for debugging.
@@ -30,7 +31,7 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
         import torch
         stream = torch.cuda.current_stream().cuda_stream
 
-    _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, stream, unlink, nvtx)
+    _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, stream, discard, unlink, nvtx)
 
 
 @dataclasses.dataclass
@@ -53,7 +54,8 @@ def do_bench_isolated(
         test_generator: TestGeneratorInterface,
         test_args: tuple,
         repeats: int,
-        stream: int = None,
+        *,
+        discard: bool = True,
         nvtx: bool = False
 ) -> BenchmarkResult:
     """
@@ -73,7 +75,7 @@ def do_bench_isolated(
             process = ctx.Process(
                 target=do_bench_impl,
                 args=(result_file, kernel_generator, test_generator,
-                      test_args, repeats, stream, True, nvtx)  # unlink=True
+                      test_args, repeats, None, discard, True, nvtx)  # unlink=True
             )
 
             process.start()

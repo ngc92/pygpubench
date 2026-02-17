@@ -14,7 +14,7 @@
 #include <sys/prctl.h>
 
 
-void clear_cache(void* dummy_memory, int size, cudaStream_t stream);
+void clear_cache(void* dummy_memory, int size, bool discard, cudaStream_t stream);
 
 void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& expected, const nb_cuda_array& received, float r_tol, float a_tol, std::size_t n_bytes, cudaStream_t stream) {
     nb::dlpack::dtype bf16_dt{static_cast<std::uint8_t>(nb::dlpack::dtype_code::Bfloat), 16, 1};
@@ -31,7 +31,7 @@ void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& ex
     }
 }
 
-BenchmarkManager::BenchmarkManager(std::string result_file, bool unlink, bool nvtx) {
+BenchmarkManager::BenchmarkManager(std::string result_file, bool discard, bool unlink, bool nvtx) {
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
     CUDA_CHECK(cudaDeviceGetAttribute(&mL2CacheSize, cudaDevAttrL2CacheSize, device));
@@ -39,6 +39,7 @@ BenchmarkManager::BenchmarkManager(std::string result_file, bool unlink, bool nv
     CUDA_CHECK(cudaMalloc(&mDeviceErrorCounter, sizeof(unsigned)));
     mOutputFile.open(result_file);
     mNVTXEnabled = nvtx;
+    mDiscardCache = discard;
     if (unlink)
         std::remove(result_file.c_str());
 }
@@ -110,6 +111,10 @@ void BenchmarkManager::validate_result(Expected& expected, const nb_cuda_array& 
             expected.Value, result,
             expected.RTol, expected.ATol, result.nbytes(), stream);
     }
+}
+
+void BenchmarkManager::clear_cache(cudaStream_t stream) {
+    ::clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, mDiscardCache, stream);
 }
 
 BenchmarkManager::ShadowArgument::ShadowArgument(nb_cuda_array original, void* shadow, unsigned seed) :
@@ -199,7 +204,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         // note: we are assuming here that calling the kernel multiple times for the same input is a safe operation
         // this is only potentially problematic for in-place kernels;
         CUDA_CHECK(cudaDeviceSynchronize());
-        clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
+        clear_cache(stream);
         kernel(args.at(0));
         CUDA_CHECK(cudaDeviceSynchronize());
         std::chrono::high_resolution_clock::time_point cpu_end = std::chrono::high_resolution_clock::now();
@@ -234,7 +239,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     nvtx_push("dry-run");
     // ensure that the GPU is busy for a short moment, so we can submit all the events
     // before the GPU reaches them
-    clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
+    clear_cache(stream);
     for (int i = 0; i < DRY_EVENTS; i++) {
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
@@ -264,7 +269,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         }
 
         nvtx_push("cc");
-        clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, stream);
+        clear_cache(stream);
         nvtx_pop();
 
         // ok, now we revert the canaries. This _does_ bring in the corresponding cache lines,
