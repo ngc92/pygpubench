@@ -261,16 +261,23 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
     std::random_device rd;
     std::mt19937 rng(rd());
+
+    // create a randomized order for running the tests
+    std::vector<int> test_order(actual_calls);
+    std::iota(test_order.begin(), test_order.end(), 1);
+    std::shuffle(test_order.begin(), test_order.end(), rng);
+
     std::uniform_int_distribution<unsigned> check_seed_generator(0,  0xffffffff);
 
     nvtx_push("benchmark");
     // now do the real runs
     for (int i = 0; i < actual_calls; i++) {
+        int test_id = test_order.at(i);
         // page-in real inputs. If the user kernel runs on the wrong stream, it's likely it won't see the correct inputs
         // unfortunately, we need to do this before clearing the cache, so there is a window of opportunity
         // *but* we deliberately modify a small subset of the inputs, which only get corrected immediately before
         // the user code call.
-        for (auto& shadow_arg : shadow_arguments.at(i + 1)) {
+        for (auto& shadow_arg : shadow_arguments.at(test_id)) {
             if (shadow_arg) {
                 CUDA_CHECK(cudaMemcpyAsync(shadow_arg->Original.data(), shadow_arg->Shadow, shadow_arg->Original.nbytes(), cudaMemcpyDeviceToDevice, stream));
             }
@@ -282,7 +289,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
         // ok, now we revert the canaries. This _does_ bring in the corresponding cache lines,
         // but they are very sparse (1/256), so that seems like an acceptable trade-off
-        for (auto& shadow_arg : shadow_arguments.at(i + 1)) {
+        for (auto& shadow_arg : shadow_arguments.at(test_id)) {
             if (shadow_arg) {
                 canaries(shadow_arg->Original.data(), shadow_arg->Original.nbytes(), shadow_arg->Seed, stream);
             }
@@ -290,12 +297,12 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         nvtx_push("kernel");
-        kernel(args.at(i + 1));
+        (void)kernel(args.at(test_id));
         nvtx_pop();
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,
         // this increases the chance of detection.
-        validate_result(expected_outputs.at(i + 1), outputs.at(i + 1), check_seed_generator(rng), stream);
+        validate_result(expected_outputs.at(test_id), outputs.at(test_id), check_seed_generator(rng), stream);
     }
     nvtx_pop();
 
@@ -310,7 +317,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     for (int i = 0; i < actual_calls; i++) {
         float duration;
         CUDA_CHECK(cudaEventElapsedTime(&duration, mStartEvents.at(i), mEndEvents.at(i)));
-        mOutputFile << i << "\t" << (duration * 1000) << "\n";
+        mOutputFile << test_order.at(i) << "\t" << (duration * 1000) << "\n";
     }
     mOutputFile.flush();
 
