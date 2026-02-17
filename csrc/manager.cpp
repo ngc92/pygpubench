@@ -16,16 +16,16 @@
 
 void clear_cache(void* dummy_memory, int size, bool discard, cudaStream_t stream);
 
-void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& expected, const nb_cuda_array& received, float r_tol, float a_tol, std::size_t n_bytes, cudaStream_t stream) {
+void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& expected, const nb_cuda_array& received, float r_tol, float a_tol, unsigned seed, std::size_t n_bytes, cudaStream_t stream) {
     nb::dlpack::dtype bf16_dt{static_cast<std::uint8_t>(nb::dlpack::dtype_code::Bfloat), 16, 1};
     nb::dlpack::dtype fp16_dt{static_cast<std::uint8_t>(nb::dlpack::dtype_code::Float), 16, 1};
     nb::dlpack::dtype fp32_dt{static_cast<std::uint8_t>(nb::dlpack::dtype_code::Float), 32, 1};
     if (expected.dtype() == bf16_dt) {
-        check_check_approx_match_launcher(result, static_cast<const nv_bfloat16*>(expected.data()), static_cast<const nv_bfloat16*>(received.data()), r_tol, a_tol, n_bytes / 2, stream);
+        check_check_approx_match_launcher(result, static_cast<const nv_bfloat16*>(expected.data()), static_cast<const nv_bfloat16*>(received.data()), r_tol, a_tol, seed, n_bytes / 2, stream);
     } else if (expected.dtype() == fp16_dt) {
-        check_check_approx_match_launcher(result, static_cast<const half*>(expected.data()), static_cast<const half*>(received.data()), r_tol, a_tol, n_bytes / 2, stream);
+        check_check_approx_match_launcher(result, static_cast<const half*>(expected.data()), static_cast<const half*>(received.data()), r_tol, a_tol, seed, n_bytes / 2, stream);
     } else if (expected.dtype() == fp32_dt) {
-        check_check_approx_match_launcher(result, static_cast<const float*>(expected.data()), static_cast<const float*>(received.data()), r_tol, a_tol, n_bytes / 4, stream);
+        check_check_approx_match_launcher(result, static_cast<const float*>(expected.data()), static_cast<const float*>(received.data()), r_tol, a_tol, seed, n_bytes / 4, stream);
     } else {
         throw std::runtime_error("Unsupported dtype for check_approx_match");
     }
@@ -101,18 +101,19 @@ void BenchmarkManager::nvtx_pop() {
         nvtxRangePop();
 }
 
-void BenchmarkManager::validate_result(Expected& expected, const nb_cuda_array& result, cudaStream_t stream) {
+void BenchmarkManager::validate_result(Expected& expected, const nb_cuda_array& result, unsigned seed, cudaStream_t stream) {
     if (expected.Mode == Expected::ExactMatch) {
         check_exact_match_launcher(
             mDeviceErrorCounter,
             static_cast<std::byte*>(expected.Value.data()),
             static_cast<std::byte*>(result.data()),
+            seed,
             result.nbytes(), stream);
     } else {
         check_check_approx_match_dispatch(
             mDeviceErrorCounter,
             expected.Value, result,
-            expected.RTol, expected.ATol, result.nbytes(), stream);
+            expected.RTol, expected.ATol, seed, result.nbytes(), stream);
     }
 }
 
@@ -258,6 +259,10 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     float median = empty_event_times.at(empty_event_times.size() / 2);
     mOutputFile << "event-overhead\t" << median * 1000 << " µs\n";
 
+    std::random_device rd;
+    std::mt19937 rng(rd());
+    std::uniform_int_distribution<unsigned> check_seed_generator(0,  0xffffffff);
+
     nvtx_push("benchmark");
     // now do the real runs
     for (int i = 0; i < actual_calls; i++) {
@@ -290,7 +295,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,
         // this increases the chance of detection.
-        validate_result(expected_outputs.at(i + 1), outputs.at(i + 1), stream);
+        validate_result(expected_outputs.at(i + 1), outputs.at(i + 1), check_seed_generator(rng), stream);
     }
     nvtx_pop();
 

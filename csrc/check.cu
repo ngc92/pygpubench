@@ -9,9 +9,16 @@
 
 #include "utils.h"
 
+__device__ std::size_t random_index(unsigned seed) {
+    unsigned total_blocks = gridDim.x;
+    unsigned original_block_id = blockIdx.x;
+    unsigned randomized_block_id = (original_block_id * 2654435761u + seed) % total_blocks;
+    return randomized_block_id * blockDim.x + threadIdx.x;
+}
+
 // bitwise exact match
-__global__ void check_exact_match_kernel(unsigned* result, const uint4* expected, const uint4* received, std::size_t size) {
-    std::size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void check_exact_match_kernel(unsigned* result, const uint4* expected, const uint4* received, unsigned seed, std::size_t size) {
+    std::size_t idx = random_index(seed);
     if (idx >= size) return;
     uint4 a = expected[idx];
     cuda::atomic_ref<unsigned, cuda::thread_scope_device> res(*result);
@@ -27,8 +34,8 @@ __global__ void check_exact_match_kernel(unsigned* result, const uint4* expected
 }
 
 template<typename Float>
-__global__ void check_approx_match_kernel(unsigned* result, const Float* expected, const Float* received, float r_tol, float a_tol, std::size_t size) {
-    std::size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void check_approx_match_kernel(unsigned* result, const Float* expected, const Float* received, float r_tol, float a_tol, unsigned seed, std::size_t size) {
+    std::size_t idx = random_index(seed);
     if (idx >= size) return;
     cuda::atomic_ref<unsigned, cuda::thread_scope_device> res(*result);
     float a = static_cast<float>(expected[idx]);
@@ -64,7 +71,7 @@ __global__ void check_approx_match_kernel(unsigned* result, const Float* expecte
 }
 
 
-void check_exact_match_launcher(unsigned* result, const std::byte* expected, const std::byte* received, std::size_t nbytes, cudaStream_t stream) {
+void check_exact_match_launcher(unsigned* result, const std::byte* expected, const std::byte* received, unsigned seed, std::size_t nbytes, cudaStream_t stream) {
     if (nbytes % sizeof(uint4) != 0) {
         throw std::runtime_error("Expected number of bytes to be divisible by 16");
     }
@@ -89,11 +96,11 @@ void check_exact_match_launcher(unsigned* result, const std::byte* expected, con
     config.gridDim = dim3(blocks, 1, 1);
     config.dynamicSmemBytes = 0;
     config.stream = stream;
-    CUDA_CHECK(cudaLaunchKernelEx(&config, check_exact_match_kernel, result, reinterpret_cast<const uint4*>(expected), reinterpret_cast<const uint4*>(received), nbytes / sizeof(uint4)));
+    CUDA_CHECK(cudaLaunchKernelEx(&config, check_exact_match_kernel, result, reinterpret_cast<const uint4*>(expected), reinterpret_cast<const uint4*>(received), seed, nbytes / sizeof(uint4)));
 }
 
 template<typename Float>
-void check_check_approx_match_launcher_tpl(unsigned* result, const Float* expected, const Float* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream) {
+void check_check_approx_match_launcher_tpl(unsigned* result, const Float* expected, const Float* received, float r_tol, float a_tol, unsigned seed, std::size_t size, cudaStream_t stream) {
     if ( !(a_tol >= 0) ) throw std::runtime_error("Absolute tolerance must be non-negative");
     if ( !(r_tol >= 0) ) throw std::runtime_error("Relative tolerance must be non-negative");
     int threads = 256;
@@ -110,19 +117,19 @@ void check_check_approx_match_launcher_tpl(unsigned* result, const Float* expect
     config.gridDim = dim3(blocks, 1, 1);
     config.dynamicSmemBytes = 0;
     config.stream = stream;
-    CUDA_CHECK(cudaLaunchKernelEx(&config, check_approx_match_kernel<Float>, result, expected, received, r_tol, a_tol, size));
+    CUDA_CHECK(cudaLaunchKernelEx(&config, check_approx_match_kernel<Float>, result, expected, received, r_tol, a_tol, seed, size));
 }
 
-void check_check_approx_match_launcher(unsigned* result, const float* expected, const float* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream) {
-    check_check_approx_match_launcher_tpl<float>(result, expected, received, r_tol, a_tol, size, stream);
+void check_check_approx_match_launcher(unsigned* result, const float* expected, const float* received, float r_tol, float a_tol, unsigned seed, std::size_t size, cudaStream_t stream) {
+    check_check_approx_match_launcher_tpl<float>(result, expected, received, r_tol, a_tol, seed, size, stream);
 }
 
-void check_check_approx_match_launcher(unsigned* result, const nv_bfloat16* expected, const nv_bfloat16* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream) {
-    check_check_approx_match_launcher_tpl<nv_bfloat16>(result, expected, received, r_tol, a_tol, size, stream);
+void check_check_approx_match_launcher(unsigned* result, const nv_bfloat16* expected, const nv_bfloat16* received, float r_tol, float a_tol, unsigned seed, std::size_t size, cudaStream_t stream) {
+    check_check_approx_match_launcher_tpl<nv_bfloat16>(result, expected, received, r_tol, a_tol, seed, size, stream);
 }
 
-void check_check_approx_match_launcher(unsigned* result, const half* expected, const half* received, float r_tol, float a_tol, std::size_t size, cudaStream_t stream) {
-    check_check_approx_match_launcher_tpl<half>(result, expected, received, r_tol, a_tol, size, stream);
+void check_check_approx_match_launcher(unsigned* result, const half* expected, const half* received, float r_tol, float a_tol, unsigned seed, std::size_t size, cudaStream_t stream) {
+    check_check_approx_match_launcher_tpl<half>(result, expected, received, r_tol, a_tol, seed, size, stream);
 }
 
 __global__ void canaries_kernel(uint4* data, int size, unsigned seed) {
