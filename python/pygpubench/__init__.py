@@ -7,6 +7,7 @@ from typing import Optional
 
 from . import _pygpubench
 from ._types import *
+from .utils import DeterministicContext
 
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
@@ -30,7 +31,8 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
         import torch
         stream = torch.cuda.current_stream().cuda_stream
 
-    _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, seed, stream, discard, unlink, nvtx)
+    with DeterministicContext():
+        _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, seed, stream, discard, unlink, nvtx)
 
 
 @dataclasses.dataclass
