@@ -31,7 +31,7 @@ void check_check_approx_match_dispatch(unsigned* result, const nb_cuda_array& ex
     }
 }
 
-BenchmarkManager::BenchmarkManager(std::string result_file, bool discard, bool unlink, bool nvtx) {
+BenchmarkManager::BenchmarkManager(std::string result_file, std::uint64_t seed, bool discard, bool unlink, bool nvtx) {
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
     CUDA_CHECK(cudaDeviceGetAttribute(&mL2CacheSize, cudaDevAttrL2CacheSize, device));
@@ -40,6 +40,7 @@ BenchmarkManager::BenchmarkManager(std::string result_file, bool discard, bool u
     mOutputFile.open(result_file);
     mNVTXEnabled = nvtx;
     mDiscardCache = discard;
+    mSeed = seed;
     if (unlink)
         std::remove(result_file.c_str());
 }
@@ -52,11 +53,13 @@ BenchmarkManager::~BenchmarkManager() {
 }
 
 std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats) {
+    std::mt19937_64 rng(mSeed);
+    std::uniform_int_distribution<std::uint64_t> dist(0, std::numeric_limits<std::uint64_t>::max());
     // generate one more input to handle warmup
     std::vector<nb::tuple> kernel_args(repeats + 1);
     std::vector<nb::tuple> expected(repeats + 1);
     for (int i = 0; i < repeats + 1; i++) {
-        auto gen = nb::cast<nb::tuple>(generate_test_case(args));
+        auto gen = nb::cast<nb::tuple>(generate_test_case(args, dist(rng)));
         kernel_args[i] = nb::cast<nb::tuple>(gen[0]);
         expected[i] = nb::cast<nb::tuple>(gen[1]);
     }
