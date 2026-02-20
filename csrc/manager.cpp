@@ -317,7 +317,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     for (int i = 0; i < actual_calls; i++) {
         float duration;
         CUDA_CHECK(cudaEventElapsedTime(&duration, mStartEvents.at(i), mEndEvents.at(i)));
-        mOutputFile << test_order.at(i) << "\t" << (duration * 1000) << "\n";
+        mOutputFile << test_order.at(i) - 1 << "\t" << (duration * 1000) << "\n";
     }
     mOutputFile.flush();
 

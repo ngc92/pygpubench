@@ -10,7 +10,7 @@
 
 // Compare expected and received for exact bitwise matches. `result` counts the number of _16-byte_ regions that contain
 // mismatches.
-void check_exact_match_launcher(unsigned* result, const std::byte* expected, const std::byte* received, std::size_t n_bytes, unsigned seed, cudaStream_t stream);
+void check_exact_match_launcher(unsigned* result, const std::byte* expected, const std::byte* received, unsigned seed, std::size_t nbytes, cudaStream_t stream);
 
 // compare expected and received using max(atol, abs(expected)*rtol)
 void check_check_approx_match_launcher(unsigned* result, const float* expected, const float* received, float r_tol, float a_tol, unsigned seed, std::size_t size, cudaStream_t stream);
