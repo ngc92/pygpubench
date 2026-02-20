@@ -1,5 +1,6 @@
 import torch
 import pygpubench
+import functools
 
 
 def reference_kernel(data):
@@ -8,16 +9,6 @@ def reference_kernel(data):
                            device=data.device,
                            dtype=data.dtype)
     output[...] = torch.sum(data * weights, dim=-1)
-
-
-_weights = torch.tensor([0.2989, 0.5870, 0.1140],
-                       device="cuda:0",
-                       dtype=torch.float32)
-
-@torch.compile
-def custom_kernel(data):
-    output, data = data
-    torch.sum(data * _weights, dim=-1, out=output)
 
 
 def generate_input(size: int, seed: int):
@@ -45,12 +36,21 @@ def generate_test_case(args, seed):
     return (y, x), (expected, 1e-6, 1e-6)
 
 
-def kernel_generator():
-    return custom_kernel
+def kernel_generator(kernel):
+    import submission
+    return getattr(submission, kernel)
+
 
 #void do_bench(std::string target_file, const nb::callable& kernel_generator, const nb::callable& test_generator, const nb::tuple& test_args, int repeats, std::uintptr_t stream) {
 if __name__ == "__main__":
-    res = pygpubench.do_bench_isolated(kernel_generator, generate_test_case,  (1024,), 100, 5, discard=True)
-    print(res)
-    print(pygpubench.basic_stats(res.time_us))
+    kernels = ["valid_custom_kernel_eager", "valid_custom_kernel_compiled", "valid_custom_kernel_stream"]
+    for kernel in kernels:
+        print(kernel)
+        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  (1024,), 100, 5, discard=True)
+        print("❌" if res.errors else "✅", pygpubench.basic_stats(res.time_us))
+    broken = ["wrong_custom_kernel_backward_race", "wrong_custom_kernel_forward_race"]
+    for kernel in broken:
+        print(kernel)
+        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  (1024,), 100, 5, discard=True)
+        print("❌" if res.errors else "✅",pygpubench.basic_stats(res.time_us))
     print("done")

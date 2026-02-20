@@ -41,4 +41,3 @@ again to minimize the window of opportunity for cheating by writing results from
 small effect on performance, as during the tail of the user kernel blocks of the test kernel are already put on the SMs
 and generate memory traffic. In the checking kernel, the order in which blocks are checked is randomized, so that it is
 not a viable strategy to only write the later blocks of the result from an unsynchronized stream.
-
