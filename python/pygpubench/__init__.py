@@ -42,13 +42,25 @@ class BenchmarkResult:
     errors: Optional[int]
 
 
-def basic_stats(time_us: list[float]):
+@dataclasses.dataclass
+class BenchmarkSummary:
+    fastest: float
+    slowest: float
+    median: float
+    mean: float
+    std: float
+
+    def __str__(self):
+        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.fastest:.1f} - {self.median:.1f} - {self.slowest:.1f}]"
+
+
+def basic_stats(time_us: list[float]) -> BenchmarkSummary:
     fastest = min(time_us)
     slowest = max(time_us)
     median = sorted(time_us)[len(time_us) // 2]
     mean = sum(time_us) / len(time_us)
     std = sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us)
-    return fastest, slowest, median, mean, std
+    return BenchmarkSummary(fastest, slowest, median, mean, std)
 
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
