@@ -6,6 +6,7 @@
 #include <vector_types.h>
 #include <cuda/atomic>
 #include <cuda/cmath>
+#include <cooperative_groups.h>
 
 #include "utils.h"
 
@@ -132,28 +133,51 @@ void check_check_approx_match_launcher(unsigned* result, const half* expected, c
     check_check_approx_match_launcher_tpl<half>(result, expected, received, r_tol, a_tol, seed, size, stream);
 }
 
-__global__ void canaries_kernel(uint4* data, int size, unsigned seed) {
-    unsigned tg = threadIdx.x / 8;
-    unsigned idx = (blockIdx.x * blockDim.x + threadIdx.x) / 8;
-    unsigned rtg = tg ^ (seed & 0x1f); // "random" index  [0, 31]
-    unsigned lb = seed >> 5u;
-    // we pick 1 out of every 256 cache lines
-    unsigned cache_line = idx * 256 + (rtg * 48 + lb & 0x7);
-    unsigned addr = cache_line * 128 / sizeof(int4) + threadIdx.x % 8;
-    if (addr < size) {
-        uint4 load = data[addr];
-        // self-inverse transformation
-        load.x = load.x ^ seed;
-        load.y = ~load.y;
-        load.z = load.z ^ seed;
-        load.w = ~load.w;
-        data[addr] = load;
+/// pseudo-random invertible transformation of a very small subset of input cache lines.
+__global__ void canaries_kernel(uint4* data, size_t size, unsigned seed) {
+    auto grid = cooperative_groups::this_grid();
+    constexpr unsigned CACHE_LINE_SIZE = 128;
+    constexpr unsigned STRIDE = 256;
+    constexpr unsigned THREADS_PER_LINE = 8;
+    constexpr unsigned LINES_PER_BLOCK = 256 / THREADS_PER_LINE;
+
+    grid.sync();
+    // using 16-byte loads/stores, each group of 8 threads handles one cache line
+    const unsigned tg = threadIdx.x / THREADS_PER_LINE;
+    const unsigned rtg = tg ^ (seed & 0x1f); // "random" index  [0, 31]
+    const unsigned lb = seed >> 5u;
+
+    unsigned num_blocks  = cuda::ceil_div(size, LINES_PER_BLOCK * CACHE_LINE_SIZE * STRIDE);
+    for (unsigned bidx = blockIdx.x; bidx < num_blocks; bidx += gridDim.x) {
+        unsigned idx = bidx * LINES_PER_BLOCK + tg;
+        // we pick 1 out of every 256 cache lines
+        unsigned cache_line = idx * STRIDE + (rtg * 48 + lb) % STRIDE;
+        unsigned addr = cache_line * CACHE_LINE_SIZE / sizeof(uint4) + threadIdx.x % 8;
+        if (addr * sizeof(uint4) < size) {
+            uint4 load = data[addr];
+            // self-inverse transformation
+            load.x = load.x ^ seed;
+            load.y = ~load.y;
+            load.z = load.z ^ seed;
+            load.w = ~load.w;
+            data[addr] = load;
+        }
     }
+
+    grid.sync();
 }
 
 void canaries(void* data, size_t size, unsigned seed, cudaStream_t stream) {
-    int num_sectors = size / (128 * 256);
-    int block_size  = 256;
-    int num_blocks  = cuda::ceil_div(num_sectors, block_size / 8);
-    canaries_kernel<<<num_blocks, 256, 0, stream>>>(reinterpret_cast<uint4*>(data), size / sizeof(int4), seed);
+    int block_size = 256;
+    int dev, smem, max_blocks, num_sms;
+    CUDA_CHECK(cudaGetDevice(&dev));
+    CUDA_CHECK(cudaDeviceGetAttribute(&num_sms, cudaDevAttrMultiProcessorCount, dev));
+
+    // allocate all available shared memory to prevent concurrent blocks
+    CUDA_CHECK(cudaDeviceGetAttribute(&smem, cudaDevAttrMaxSharedMemoryPerBlock, dev));
+    CUDA_CHECK(cudaFuncSetAttribute(&canaries_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks, &canaries_kernel, block_size, smem));
+    int grid_size = max_blocks * num_sms;
+    void *pArgs[] = { &data, &size, &seed};
+    CUDA_CHECK(cudaLaunchCooperativeKernel(&canaries_kernel, grid_size, block_size, pArgs, smem, stream));
 }
