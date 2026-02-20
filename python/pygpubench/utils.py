@@ -1,5 +1,4 @@
 import os
-import torch
 
 class DeterministicContext:
     def __init__(self):
@@ -8,6 +7,7 @@ class DeterministicContext:
         self.cublas = None
 
     def __enter__(self):
+        import torch
         self.cublas = os.environ.get('CUBLAS_WORKSPACE_CONFIG', '')
         self.allow_tf32 = torch.backends.cudnn.allow_tf32
         self.deterministic = torch.backends.cudnn.deterministic
@@ -17,6 +17,7 @@ class DeterministicContext:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        import torch
         torch.backends.cudnn.allow_tf32 = self.allow_tf32
         torch.backends.cudnn.deterministic = self.deterministic
         torch.use_deterministic_algorithms(False)

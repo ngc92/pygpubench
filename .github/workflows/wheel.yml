@@ -1,0 +1,59 @@
+name: Build Wheels
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  wheel:
+    name: Build wheel (CUDA ${{ matrix.cuda_version }})
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.cuda_image }}
+
+    strategy:
+      matrix:
+        include:
+          # disabled for now
+          #- cuda_version: "12.8"
+          #  cuda_image: "nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04"
+          #  wheel_tag: "cu128"
+          #  archs: "80;90;100;120"
+          - cuda_version: "13.0"
+            cuda_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04"
+            wheel_tag: "cu130"
+            archs: "80;90;100f;120f"
+
+    env:
+      CMAKE_GENERATOR: Ninja
+      CMAKE_C_COMPILER: gcc-13
+      CMAKE_CXX_COMPILER: g++-13
+      CUDAARCHS: ${{ matrix.archs }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install deps
+        run: apt update && apt install -y git g++-13
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Repair wheel with auditwheel
+        run: |
+          uv run --no-project --with auditwheel --with patchelf auditwheel repair dist/*.whl -w wheelhouse/ --exclude libcuda.so.1 --exclude libcudart.so.12 --exclude libcudart.so.13 --exclude libnvidia-ml.so.1
+          rm dist/*-linux_*.whl  # Remove non-repaired wheel
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.wheel_tag }}
+          path: wheelhouse/pygpubench*.whl
