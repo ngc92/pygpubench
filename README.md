@@ -5,6 +5,42 @@ Contrary to many existing benchmarking tools, which generally assume a cooperati
 can be tested and benchmarked independently, this library tries to defend against kernels that
 try to exploit benchmarking flaws to receive higher scores.
 
+## Usage
+To benchmark a kernel, two ingredients are needed:
+1. A function that _generates_ the kernel. This function takes no arguments and returns a callable. It is important that
+   untrusted code, e.g., the user-supplied python module, is only imported inside this function.
+2. A function that generates test/benchmark inputs. This function takes a tuple of configuration parameters, as well as an
+   integer to seed the rng, as arguments. It returns two tuples: The first contains the inputs for the kernel and will
+   be used to call the kernel function, and the second contains the expected output and the required absolute and relative tolerance.
+
+```python
+import torch
+import pygpubench
+
+def generate_input(*args):
+    ...
+
+def reference_kernel(args):
+    ...
+
+def generate_test_case(args, seed):
+    x, y = generate_input(*args, seed)
+    expected = torch.empty_like(y)
+    reference_kernel((expected, x))
+    return (y, x), (expected, 1e-6, 1e-6)
+
+
+def kernel_generator():
+    import submission
+    return submission.kernel
+
+res = pygpubench.do_bench_isolated(kernel_generator, generate_test_case,  (1024,), 100, 5, discard=True)
+print("❌" if res.errors else "✅", pygpubench.basic_stats(res.time_us))
+```
+For the full example see [grayscale.py](test/grayscale.py)
+
+
+## Implementation
 Unfortunately, any benchmarking tool written in python is inherently vulnerable to monkeypatching
 and `inpect`-based manipulation of its variables by its callees. 
 Therefore, PyGPUBench implements its main benchmarking logic in a compiled C++ extension. 
