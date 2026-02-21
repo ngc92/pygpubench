@@ -1,3 +1,5 @@
+[![PyPI version](https://img.shields.io/pypi/v/pygpubench)](https://pypi.org/project/pygpubench/)
+
 # PyGPUBench
 
 Utilities for benchmarking low-latency CUDA kernels in an _adversarial_ setting.
