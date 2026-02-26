@@ -62,7 +62,7 @@ jobs:
     name: Publish to GitHub Releases
     needs: wheel
     runs-on: ubuntu-24.04
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     permissions:
       contents: write
 
@@ -94,7 +94,7 @@ jobs:
       - name: Create GitHub Release
         run: |
           gh release create "${{ steps.meta.outputs.tag }}" dist/*.whl \
-            --prerelease \
+            ${{ github.event_name == 'push' && '--prerelease' || '' }} \
             --title "pygpubench ${{ steps.meta.outputs.tag }}" \
             --notes "Built from commit ${{ github.sha }}.
 
