@@ -99,13 +99,12 @@ def do_bench_isolated(
                 raise RuntimeError(f"Benchmark subprocess failed with exit code {process.exitcode}")
 
             # Read results from file
-            results = BenchmarkResult(None, [None] * repeats, None)
+            results = BenchmarkResult(None, [], None)
             for line in f:
                 parts = line.strip().split('\t')
                 if len(parts) == 2 and parts[0].isdigit():
-                    iteration = int(parts[0])
                     time_us = float(parts[1])
-                    results.time_us[iteration] = time_us
+                    results.time_us.append(time_us)
                 elif parts[0] == "event-overhead":
                     results.event_overhead_us = float(parts[1].split()[0])
                 elif parts[0] == "error-count":
