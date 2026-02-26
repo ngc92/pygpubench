@@ -82,7 +82,7 @@ jobs:
         run: |
           VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          TAG="v${VERSION}+${SHORT_SHA}"
+          TAG="v${VERSION}-${SHORT_SHA}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
