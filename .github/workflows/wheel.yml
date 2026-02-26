@@ -80,7 +80,7 @@ jobs:
       - name: Get version and short SHA
         id: meta
         run: |
-          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           TAG="v${VERSION}-${SHORT_SHA}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
