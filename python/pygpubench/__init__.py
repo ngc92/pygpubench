@@ -9,6 +9,19 @@ from . import _pygpubench
 from ._types import *
 from .utils import DeterministicContext
 
+__all__ = [
+    "do_bench_impl",
+    "do_bench_isolated",
+    "basic_stats",
+    "BenchmarkResult",
+    "BenchmarkSummary",
+    "DeterministicContext",
+    "KernelFunction",
+    "KernelGeneratorInterface",
+    "TestGeneratorInterface",
+    "ExpectedResult",
+]
+
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
                   test_args: tuple, repeats: int, seed: int, stream: int = None, discard: bool = True,
