@@ -1,4 +1,5 @@
 import dataclasses
+import math
 import multiprocessing as mp
 import tempfile
 
@@ -59,7 +60,7 @@ def basic_stats(time_us: list[float]) -> BenchmarkSummary:
     slowest = max(time_us)
     median = sorted(time_us)[len(time_us) // 2]
     mean = sum(time_us) / len(time_us)
-    std = sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us)
+    std = math.sqrt(sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us))
     return BenchmarkSummary(fastest, slowest, median, mean, std)
 
 def do_bench_isolated(
