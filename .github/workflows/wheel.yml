@@ -57,3 +57,54 @@ jobs:
         with:
           name: wheel-${{ matrix.wheel_tag }}
           path: wheelhouse/pygpubench*.whl
+
+  release:
+    name: Publish to GitHub Releases
+    needs: wheel
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Get version and short SHA
+        id: meta
+        run: |
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAG="v${VERSION}+${SHORT_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Delete existing release if tag exists
+        run: gh release delete "${{ steps.meta.outputs.tag }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" dist/*.whl \
+            --title "pygpubench ${{ steps.meta.outputs.tag }}" \
+            --notes "Built from commit ${{ github.sha }}.
+
+          Install with:
+          \`\`\`
+          pip install pygpubench --find-links https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/
+          \`\`\`
+
+          Or install the latest release:
+          \`\`\`
+          pip install pygpubench --find-links https://github.com/${{ github.repository }}/releases/latest/download/
+          \`\`\`"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
