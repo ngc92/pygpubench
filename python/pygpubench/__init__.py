@@ -2,6 +2,7 @@ import dataclasses
 import math
 import multiprocessing as mp
 import tempfile
+import traceback
 
 from pathlib import Path
 from typing import Optional
@@ -26,7 +27,7 @@ __all__ = [
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
                   test_args: tuple, repeats: int, seed: int, stream: int = None, discard: bool = True,
-                  unlink: bool = False, nvtx: bool = False):
+                  unlink: bool = False, nvtx: bool = False, tb_conn=None):
     """
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
@@ -39,14 +40,31 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
     :param unlink: Whether to unlink the output file before calling `kernel_generator`. Unlinking makes it impossible to
     open the file again, protecting it against malicious kernels.
     :param nvtx: Whether to enable NVTX markers for the benchmark. Mostly useful for debugging.
+    :param tb_conn: A connection to a multiprocessing pipe for sending tracebacks to the parent process.
     """
     assert repeats > 1
     if stream is None:
         import torch
         stream = torch.cuda.current_stream().cuda_stream
 
-    with DeterministicContext():
-        _pygpubench.do_bench(out_file, kernel_generator, test_generator, test_args, repeats, seed, stream, discard, unlink, nvtx)
+    try:
+        with DeterministicContext():
+            _pygpubench.do_bench(
+                out_file,
+                kernel_generator,
+                test_generator,
+                test_args,
+                repeats,
+                seed,
+                stream,
+                discard,
+                unlink,
+                nvtx,
+            )
+    except BaseException:
+        if tb_conn is not None:
+            tb_conn.send(traceback.format_exc())
+        raise
 
 
 @dataclasses.dataclass
@@ -76,6 +94,7 @@ def basic_stats(time_us: list[float]) -> BenchmarkSummary:
     std = math.sqrt(sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us))
     return BenchmarkSummary(fastest, slowest, median, mean, std)
 
+
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
         test_generator: TestGeneratorInterface,
@@ -100,17 +119,34 @@ def do_bench_isolated(
         with open(result_file, 'r') as f:
             # Spawn testing process
             ctx = mp.get_context('spawn')
+            parent_conn, child_conn = ctx.Pipe(duplex=False)
             process = ctx.Process(
                 target=do_bench_impl,
-                args=(result_file, kernel_generator, test_generator,
-                      test_args, repeats, seed, None, discard, True, nvtx)  # unlink=True
+                args=(
+                    result_file,
+                    kernel_generator,
+                    test_generator,
+                    test_args,
+                    repeats,
+                    seed,
+                    None,
+                    discard,
+                    True,   # unlink=True
+                    nvtx,
+                    child_conn,
+                ),
             )
 
             process.start()
+            child_conn.close()
             process.join()
 
             if process.exitcode != 0:
-                raise RuntimeError(f"Benchmark subprocess failed with exit code {process.exitcode}")
+                diagnostic = parent_conn.recv() if parent_conn.poll() else None
+                msg = f"Benchmark subprocess failed with exit code {process.exitcode}"
+                if diagnostic:
+                    msg += "\n" + diagnostic
+                raise RuntimeError(msg)
 
             # Read results from file
             results = BenchmarkResult(None, [None] * repeats, None)
@@ -124,6 +160,7 @@ def do_bench_isolated(
                     results.event_overhead_us = float(parts[1].split()[0])
                 elif parts[0] == "error-count":
                     results.errors = int(parts[1])
+            parent_conn.close()
 
         return results
 
