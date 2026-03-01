@@ -15,7 +15,7 @@ __all__ = [
     "do_bench_isolated",
     "basic_stats",
     "BenchmarkResult",
-    "BenchmarkSummary",
+    "BenchmarkStats",
     "DeterministicContext",
     "KernelFunction",
     "KernelGeneratorInterface",
@@ -57,24 +57,42 @@ class BenchmarkResult:
 
 
 @dataclasses.dataclass
-class BenchmarkSummary:
-    fastest: float
-    slowest: float
+class BenchmarkStats:
+    """Summary statistics for a microbenchmark run.
+
+    Attributes:
+        runs:   Number of timed iterations.
+        best:   Fastest observed time (µs).
+        worst:  Slowest observed time (µs).
+        median: Median time (µs).
+        mean:   Arithmetic mean time (µs).
+        std:    Sample standard deviation (µs).
+        err:    Standard error of the mean (µs), i.e. std / sqrt(runs).
+    """
+
+    runs: int
+    best: float         # aka fastest
+    worst: float        # aka slowest
     median: float
     mean: float
     std: float
+    err: float
 
     def __str__(self):
-        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.fastest:.1f} - {self.median:.1f} - {self.slowest:.1f}]"
+        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.best:.1f} - {self.median:.1f} - {self.worst:.1f}]"
 
 
-def basic_stats(time_us: list[float]) -> BenchmarkSummary:
+def basic_stats(time_us: list[float]) -> BenchmarkStats:
+    runs = len(time_us)
     fastest = min(time_us)
     slowest = max(time_us)
-    median = sorted(time_us)[len(time_us) // 2]
-    mean = sum(time_us) / len(time_us)
-    std = math.sqrt(sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us))
-    return BenchmarkSummary(fastest, slowest, median, mean, std)
+    median = sorted(time_us)[runs // 2]
+    mean = sum(time_us) / runs
+    variance = sum(map(lambda x: (x - mean)**2, time_us)) / (runs - 1)
+    std = math.sqrt(variance)
+    err = std / math.sqrt(runs)
+
+    return BenchmarkStats(runs, fastest, slowest, median, mean, std, err)
 
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
@@ -113,7 +131,7 @@ def do_bench_isolated(
                 raise RuntimeError(f"Benchmark subprocess failed with exit code {process.exitcode}")
 
             # Read results from file
-            results = BenchmarkResult(None, [None] * repeats, None)
+            results = BenchmarkResult(None, [-1] * repeats, None)
             for line in f:
                 parts = line.strip().split('\t')
                 if len(parts) == 2 and parts[0].isdigit():
@@ -124,6 +142,9 @@ def do_bench_isolated(
                     results.event_overhead_us = float(parts[1].split()[0])
                 elif parts[0] == "error-count":
                     results.errors = int(parts[1])
+
+            if any((t < 0 for t in results.time_us)):
+                raise RuntimeError("Benchmark subprocess failed to write all results")
 
         return results
 
