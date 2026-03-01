@@ -6,6 +6,6 @@ ExpectedResult = Tuple[Tensor] | Tuple[Tensor, float, float]
 
 KernelFunction = Callable[[KernelArgs], None]
 KernelGeneratorInterface = Callable[[], KernelFunction]
-TestGeneratorInterface = Callable[[Tuple, int], Tuple[KernelArgs, ExpectedResult]]
+TestGeneratorInterface = Callable[..., Tuple[KernelArgs, ExpectedResult]]
 
 __all__ = ["KernelFunction", "KernelGeneratorInterface", "TestGeneratorInterface", "ExpectedResult"]

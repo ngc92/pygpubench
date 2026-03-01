@@ -52,14 +52,21 @@ BenchmarkManager::~BenchmarkManager() {
     for (auto& event : mEndEvents) cudaEventDestroy(event);
 }
 
-std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats) {
+std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats) {
     std::mt19937_64 rng(mSeed);
     std::uniform_int_distribution<std::uint64_t> dist(0, std::numeric_limits<std::uint64_t>::max());
     // generate one more input to handle warmup
     std::vector<nb::tuple> kernel_args(repeats + 1);
     std::vector<nb::tuple> expected(repeats + 1);
     for (int i = 0; i < repeats + 1; i++) {
-        auto gen = nb::cast<nb::tuple>(generate_test_case(args, dist(rng)));
+        // create new copy of the kwargs dict
+        nb::dict call_kwargs;
+        for (auto [k, v] : kwargs) {
+            call_kwargs[k] = v;
+        }
+        call_kwargs["seed"] = dist(rng);
+
+        auto gen = nb::cast<nb::tuple>(generate_test_case(**call_kwargs));
         kernel_args[i] = nb::cast<nb::tuple>(gen[0]);
         expected[i] = nb::cast<nb::tuple>(gen[1]);
     }

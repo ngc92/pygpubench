@@ -21,7 +21,7 @@ class BenchmarkManager {
 public:
     BenchmarkManager(std::string result_file, std::uint64_t seed, bool discard, bool unlink, bool nvtx);
     ~BenchmarkManager();
-    std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats);
+    std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats);
     void do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream);
 private:
     double mWarmupSeconds = 1.0;
@@ -32,9 +32,9 @@ private:
 
     std::chrono::high_resolution_clock::time_point mCPUStart;
 
-    int* mDeviceDummyMemory;
+    int* mDeviceDummyMemory = nullptr;
     int mL2CacheSize;
-    unsigned* mDeviceErrorCounter;
+    unsigned* mDeviceErrorCounter = nullptr;
     bool mNVTXEnabled = false;
     bool mDiscardCache = true;
     std::uint64_t mSeed = -1;
