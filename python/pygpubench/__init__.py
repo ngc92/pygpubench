@@ -25,14 +25,14 @@ __all__ = [
 
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
-                  test_args: tuple, repeats: int, seed: int, stream: int = None, discard: bool = True,
+                  test_args: dict, repeats: int, seed: int, stream: int = None, discard: bool = True,
                   unlink: bool = False, nvtx: bool = False):
     """
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
     :param kernel_generator: A function that takes no arguments and returns a kernel function.
-    :param test_generator: A function that takes a tuple of test arguments and returns a test case; i.e., a tuple of (input, expected)
-    :param test_args: arguments to be passed to `test_generator`
+    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case; i.e., a tuple of (input, expected)
+    :param test_args: keyword arguments to be passed to `test_generator`. Seed will be generated automatically.
     :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeat` times.
     :param stream: Cuda stream on which to run the benchmark. If not given, torch's current stream is selected
     :param discard: If true, then cache lines are discarded as part of cache clearing before each benchmark run.
@@ -79,7 +79,7 @@ def basic_stats(time_us: list[float]) -> BenchmarkSummary:
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
         test_generator: TestGeneratorInterface,
-        test_args: tuple,
+        test_args: dict,
         repeats: int,
         seed: int,
         *,
