@@ -16,7 +16,7 @@ __all__ = [
     "do_bench_isolated",
     "basic_stats",
     "BenchmarkResult",
-    "BenchmarkSummary",
+    "BenchmarkStats",
     "DeterministicContext",
     "KernelFunction",
     "KernelGeneratorInterface",
@@ -26,15 +26,15 @@ __all__ = [
 
 
 def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, test_generator: TestGeneratorInterface,
-                  test_args: tuple, repeats: int, seed: int, stream: int = None, discard: bool = True,
+                  test_args: dict, repeats: int, seed: int, stream: int = None, discard: bool = True,
                   unlink: bool = False, nvtx: bool = False, tb_conn=None):
     """
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
     :param kernel_generator: A function that takes no arguments and returns a kernel function.
-    :param test_generator: A function that takes a tuple of test arguments and returns a test case; i.e., a tuple of (input, expected)
-    :param test_args: arguments to be passed to `test_generator`
-    :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeat` times.
+    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case; i.e., a tuple of (input, expected)
+    :param test_args: keyword arguments to be passed to `test_generator`. Seed will be generated automatically.
+    :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeats` times.
     :param stream: Cuda stream on which to run the benchmark. If not given, torch's current stream is selected
     :param discard: If true, then cache lines are discarded as part of cache clearing before each benchmark run.
     :param unlink: Whether to unlink the output file before calling `kernel_generator`. Unlinking makes it impossible to
@@ -75,30 +75,48 @@ class BenchmarkResult:
 
 
 @dataclasses.dataclass
-class BenchmarkSummary:
-    fastest: float
-    slowest: float
+class BenchmarkStats:
+    """Summary statistics for a microbenchmark run.
+
+    Attributes:
+        runs:   Number of timed iterations.
+        best:   Fastest observed time (µs).
+        worst:  Slowest observed time (µs).
+        median: Median time (µs).
+        mean:   Arithmetic mean time (µs).
+        std:    Sample standard deviation (µs).
+        err:    Standard error of the mean (µs), i.e. std / sqrt(runs).
+    """
+
+    runs: int
+    best: float         # aka fastest
+    worst: float        # aka slowest
     median: float
     mean: float
     std: float
+    err: float
 
     def __str__(self):
-        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.fastest:.1f} - {self.median:.1f} - {self.slowest:.1f}]"
+        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.best:.1f} - {self.median:.1f} - {self.worst:.1f}]"
 
 
-def basic_stats(time_us: list[float]) -> BenchmarkSummary:
+def basic_stats(time_us: list[float]) -> BenchmarkStats:
+    runs = len(time_us)
     fastest = min(time_us)
     slowest = max(time_us)
-    median = sorted(time_us)[len(time_us) // 2]
-    mean = sum(time_us) / len(time_us)
-    std = math.sqrt(sum(map(lambda x: (x - mean) ** 2, time_us)) / len(time_us))
-    return BenchmarkSummary(fastest, slowest, median, mean, std)
+    median = sorted(time_us)[runs // 2]
+    mean = sum(time_us) / runs
+    variance = sum(map(lambda x: (x - mean)**2, time_us)) / (runs - 1)
+    std = math.sqrt(variance)
+    err = std / math.sqrt(runs)
+
+    return BenchmarkStats(runs, fastest, slowest, median, mean, std, err)
 
 
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
         test_generator: TestGeneratorInterface,
-        test_args: tuple,
+        test_args: dict,
         repeats: int,
         seed: int,
         *,
@@ -149,7 +167,7 @@ def do_bench_isolated(
                 raise RuntimeError(msg)
 
             # Read results from file
-            results = BenchmarkResult(None, [None] * repeats, None)
+            results = BenchmarkResult(None, [-1] * repeats, None)
             for line in f:
                 parts = line.strip().split('\t')
                 if len(parts) == 2 and parts[0].isdigit():
@@ -161,6 +179,9 @@ def do_bench_isolated(
                 elif parts[0] == "error-count":
                     results.errors = int(parts[1])
             parent_conn.close()
+
+            if any((t < 0 for t in results.time_us)):
+                raise RuntimeError("Benchmark subprocess failed to write all results")
 
         return results
 

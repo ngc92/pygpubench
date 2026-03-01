@@ -52,14 +52,25 @@ BenchmarkManager::~BenchmarkManager() {
     for (auto& event : mEndEvents) cudaEventDestroy(event);
 }
 
-std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::tuple& args, int repeats) {
+std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats) {
     std::mt19937_64 rng(mSeed);
     std::uniform_int_distribution<std::uint64_t> dist(0, std::numeric_limits<std::uint64_t>::max());
     // generate one more input to handle warmup
     std::vector<nb::tuple> kernel_args(repeats + 1);
     std::vector<nb::tuple> expected(repeats + 1);
     for (int i = 0; i < repeats + 1; i++) {
-        auto gen = nb::cast<nb::tuple>(generate_test_case(args, dist(rng)));
+        // create new copy of the kwargs dict
+        nb::dict call_kwargs;
+        for (auto [k, v] : kwargs) {
+            // Disallow user-specified "seed" to avoid silently overwriting it below.
+            if (nb::cast<std::string>(k) == "seed") {
+                throw std::runtime_error("The 'seed' keyword argument is reserved and must not be passed in kwargs.");
+            }
+            call_kwargs[k] = v;
+        }
+        call_kwargs["seed"] = dist(rng);
+
+        auto gen = nb::cast<nb::tuple>(generate_test_case(**call_kwargs));
         kernel_args[i] = nb::cast<nb::tuple>(gen[0]);
         expected[i] = nb::cast<nb::tuple>(gen[1]);
     }
@@ -195,7 +206,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     // ok, first run for compilations etc
     nvtx_push("warmup");
     CUDA_CHECK(cudaDeviceSynchronize());
-    kernel(args.at(0));
+    kernel(*args.at(0));
     CUDA_CHECK(cudaDeviceSynchronize());
     nvtx_pop();
 
@@ -209,7 +220,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         // this is only potentially problematic for in-place kernels;
         CUDA_CHECK(cudaDeviceSynchronize());
         clear_cache(stream);
-        kernel(args.at(0));
+        kernel(*args.at(0));
         CUDA_CHECK(cudaDeviceSynchronize());
         std::chrono::high_resolution_clock::time_point cpu_end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed_seconds = cpu_end - cpu_start;
@@ -297,7 +308,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         nvtx_push("kernel");
-        (void)kernel(args.at(test_id));
+        (void)kernel(*args.at(test_id));
         nvtx_pop();
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,

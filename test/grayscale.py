@@ -29,8 +29,8 @@ def generate_input(size: int, seed: int):
     return x, y
 
 
-def generate_test_case(args, seed):
-    x, y = generate_input(*args, seed)
+def generate_test_case(**kwargs):
+    x, y = generate_input(**kwargs)
     expected = torch.empty_like(y)
     reference_kernel((expected, x))
     return (y, x), (expected, 1e-6, 1e-6)
@@ -46,11 +46,11 @@ if __name__ == "__main__":
     kernels = ["valid_custom_kernel_eager", "valid_custom_kernel_compiled", "valid_custom_kernel_stream"]
     for kernel in kernels:
         print(kernel)
-        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  (1024,), 100, 5, discard=True)
+        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  {"size": 1024}, 100, 5, discard=True)
         print("❌" if res.errors else "✅", pygpubench.basic_stats(res.time_us))
     broken = ["wrong_custom_kernel_backward_race", "wrong_custom_kernel_forward_race"]
     for kernel in broken:
         print(kernel)
-        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  (1024,), 100, 5, discard=True)
+        res = pygpubench.do_bench_isolated(functools.partial(kernel_generator, kernel), generate_test_case,  {"size": 1024}, 100, 5, discard=True)
         print("❌" if res.errors else "✅",pygpubench.basic_stats(res.time_us))
     print("done")
