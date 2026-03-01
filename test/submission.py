@@ -25,7 +25,7 @@ def wrong_custom_kernel_backward_race(output, data):
     event.synchronize()
 
 
-def wrong_custom_kernel_forward_race( output, data):
+def wrong_custom_kernel_forward_race(output, data):
     event.record()
     with torch.cuda.stream(stream):
         event.synchronize()

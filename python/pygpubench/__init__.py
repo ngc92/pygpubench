@@ -33,7 +33,7 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
     :param kernel_generator: A function that takes no arguments and returns a kernel function.
     :param test_generator: A function that takes the test arguments (including a seed) and returns a test case; i.e., a tuple of (input, expected)
     :param test_args: keyword arguments to be passed to `test_generator`. Seed will be generated automatically.
-    :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeat` times.
+    :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeats` times.
     :param stream: Cuda stream on which to run the benchmark. If not given, torch's current stream is selected
     :param discard: If true, then cache lines are discarded as part of cache clearing before each benchmark run.
     :param unlink: Whether to unlink the output file before calling `kernel_generator`. Unlinking makes it impossible to
