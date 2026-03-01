@@ -202,7 +202,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
     // ok, first run for compilations etc
     nvtx_push("warmup");
     CUDA_CHECK(cudaDeviceSynchronize());
-    kernel(args.at(0));
+    kernel(*args.at(0));
     CUDA_CHECK(cudaDeviceSynchronize());
     nvtx_pop();
 
@@ -216,7 +216,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         // this is only potentially problematic for in-place kernels;
         CUDA_CHECK(cudaDeviceSynchronize());
         clear_cache(stream);
-        kernel(args.at(0));
+        kernel(*args.at(0));
         CUDA_CHECK(cudaDeviceSynchronize());
         std::chrono::high_resolution_clock::time_point cpu_end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed_seconds = cpu_end - cpu_start;
@@ -304,7 +304,7 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
 
         CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
         nvtx_push("kernel");
-        (void)kernel(args.at(test_id));
+        (void)kernel(*args.at(test_id));
         nvtx_pop();
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,
