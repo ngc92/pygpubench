@@ -62,6 +62,10 @@ std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setu
         // create new copy of the kwargs dict
         nb::dict call_kwargs;
         for (auto [k, v] : kwargs) {
+            // Disallow user-specified "seed" to avoid silently overwriting it below.
+            if (nb::cast<std::string>(k) == "seed") {
+                throw std::runtime_error("The 'seed' keyword argument is reserved and must not be passed in kwargs.");
+            }
             call_kwargs[k] = v;
         }
         call_kwargs["seed"] = dist(rng);
