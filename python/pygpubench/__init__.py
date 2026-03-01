@@ -161,6 +161,7 @@ def do_bench_isolated(
 
             if process.exitcode != 0:
                 diagnostic = parent_conn.recv() if parent_conn.poll() else None
+                parent_conn.close()
                 msg = f"Benchmark subprocess failed with exit code {process.exitcode}"
                 if diagnostic:
                     msg += "\n" + diagnostic
