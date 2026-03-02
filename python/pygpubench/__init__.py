@@ -72,6 +72,7 @@ class BenchmarkResult:
     event_overhead_us: float
     time_us: list[float]
     errors: Optional[int]
+    full: bool = False
 
 
 @dataclasses.dataclass
@@ -79,16 +80,18 @@ class BenchmarkStats:
     """Summary statistics for a microbenchmark run.
 
     Attributes:
-        runs:   Number of timed iterations.
-        best:   Fastest observed time (µs).
-        worst:  Slowest observed time (µs).
-        median: Median time (µs).
-        mean:   Arithmetic mean time (µs).
-        std:    Sample standard deviation (µs).
-        err:    Standard error of the mean (µs), i.e. std / sqrt(runs).
+        runs:     Number of timed iterations.
+        expected: Expected number of iterations.
+        best:     Fastest observed time (µs).
+        worst:    Slowest observed time (µs).
+        median:   Median time (µs).
+        mean:     Arithmetic mean time (µs).
+        std:      Sample standard deviation (µs).
+        err:      Standard error of the mean (µs), i.e. std / sqrt(runs).
     """
 
     runs: int
+    expected: int
     best: float         # aka fastest
     worst: float        # aka slowest
     median: float
@@ -97,20 +100,24 @@ class BenchmarkStats:
     err: float
 
     def __str__(self):
-        return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.best:.1f} - {self.median:.1f} - {self.worst:.1f}]"
+        if self.runs != self.expected:
+            return f"⚠️ {self.mean:.1f} ± {self.std:.2f} µs [{self.best:.1f} - {self.median:.1f} - {self.worst:.1f}]"
+        else:
+            return f"{self.mean:.1f} ± {self.std:.2f} µs [{self.best:.1f} - {self.median:.1f} - {self.worst:.1f}]"
 
 
 def basic_stats(time_us: list[float]) -> BenchmarkStats:
-    runs = len(time_us)
-    fastest = min(time_us)
-    slowest = max(time_us)
-    median = sorted(time_us)[runs // 2]
-    mean = sum(time_us) / runs
-    variance = sum(map(lambda x: (x - mean)**2, time_us)) / (runs - 1)
+    valid = [t for t in time_us if t > 0]
+    runs = len(valid)
+    fastest = min(valid)
+    slowest = max(valid)
+    median = sorted(valid)[runs // 2]
+    mean = sum(valid) / runs
+    variance = sum(map(lambda x: (x - mean)**2, valid)) / (runs - 1)
     std = math.sqrt(variance)
     err = std / math.sqrt(runs)
 
-    return BenchmarkStats(runs, fastest, slowest, median, mean, std, err)
+    return BenchmarkStats(runs, len(time_us), fastest, slowest, median, mean, std, err)
 
 
 def do_bench_isolated(
@@ -168,7 +175,7 @@ def do_bench_isolated(
                 raise RuntimeError(msg)
 
             # Read results from file
-            results = BenchmarkResult(None, [-1] * repeats, None)
+            results = BenchmarkResult(None, [-1] * repeats, None, False)
             for line in f:
                 parts = line.strip().split('\t')
                 if len(parts) == 2 and parts[0].isdigit():
@@ -180,10 +187,7 @@ def do_bench_isolated(
                 elif parts[0] == "error-count":
                     results.errors = int(parts[1])
             parent_conn.close()
-
-            if any((t < 0 for t in results.time_us)):
-                raise RuntimeError("Benchmark subprocess failed to write all results")
-
+            results.full = all((t > 0 for t in results.time_us))
         return results
 
     finally:
