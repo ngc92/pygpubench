@@ -10,6 +10,7 @@
 #include <optional>
 #include <random>
 #include <nvtx3/nvToolsExt.h>
+#include <nanobind/stl/string.h>
 
 #include <sys/prctl.h>
 
