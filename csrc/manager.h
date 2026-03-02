@@ -24,29 +24,14 @@ public:
     std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats);
     void do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream);
 private:
-    double mWarmupSeconds = 1.0;
-    double mBenchmarkSeconds = 1.0;
-
-    std::vector<cudaEvent_t> mStartEvents;
-    std::vector<cudaEvent_t> mEndEvents;
-
-    std::chrono::high_resolution_clock::time_point mCPUStart;
-
-    int* mDeviceDummyMemory = nullptr;
-    int mL2CacheSize;
-    unsigned* mDeviceErrorCounter = nullptr;
-    bool mNVTXEnabled = false;
-    bool mDiscardCache = true;
-    std::uint64_t mSeed = -1;
-
-    std::ofstream mOutputFile;
-
     struct Expected {
         enum EMode {
             ExactMatch,
             ApproxMatch
         } Mode;
-        nb_cuda_array Value;
+        void* Value = nullptr;
+        std::size_t Size;
+        nb::dlpack::dtype DType;
         float ATol;
         float RTol;
     };
@@ -62,6 +47,24 @@ private:
     };
 
     using ShadowArgumentList = std::vector<std::optional<ShadowArgument>>;
+
+    double mWarmupSeconds = 1.0;
+    double mBenchmarkSeconds = 1.0;
+
+    std::vector<cudaEvent_t> mStartEvents;
+    std::vector<cudaEvent_t> mEndEvents;
+
+    std::chrono::high_resolution_clock::time_point mCPUStart;
+
+    int* mDeviceDummyMemory = nullptr;
+    int mL2CacheSize;
+    unsigned* mDeviceErrorCounter = nullptr;
+    bool mNVTXEnabled = false;
+    bool mDiscardCache = true;
+    std::uint64_t mSeed = -1;
+    std::vector<Expected> mExpectedOutputs;
+
+    std::ofstream mOutputFile;
 
     static ShadowArgumentList make_shadow_args(const nb::tuple& args, cudaStream_t stream);
 
