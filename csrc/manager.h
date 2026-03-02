@@ -8,6 +8,7 @@
 #include <functional>
 #include <chrono>
 #include <fstream>
+#include <tuple>
 #include <cuda_runtime.h>
 #include <optional>
 #include <nanobind/nanobind.h>
@@ -21,9 +22,30 @@ class BenchmarkManager {
 public:
     BenchmarkManager(std::string result_file, std::uint64_t seed, bool discard, bool unlink, bool nvtx);
     ~BenchmarkManager();
-    std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats);
-    void do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream);
+    std::tuple<std::vector<nb::tuple>, std::vector<nb::tuple>, std::vector<nb::tuple>>
+    setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats);
+    void do_bench_py(
+        const nb::callable& kernel_generator,
+        const std::vector<nb::tuple>& args,
+        const std::vector<nb::tuple>& outputs,
+        const std::vector<nb::tuple>& expected,
+        cudaStream_t stream
+    );
 private:
+    double mWarmupSeconds = 1.0;
+    double mBenchmarkSeconds = 1.0;
+
+    std::vector<cudaEvent_t> mStartEvents;
+    std::vector<cudaEvent_t> mEndEvents;
+
+    std::chrono::high_resolution_clock::time_point mCPUStart;
+
+    int* mDeviceDummyMemory = nullptr;
+    int mL2CacheSize;
+    unsigned* mDeviceErrorCounter = nullptr;
+    bool mNVTXEnabled = false;
+    bool mDiscardCache = true;
+    std::uint64_t mSeed = -1;
     struct Expected {
         enum EMode {
             ExactMatch,
@@ -48,29 +70,14 @@ private:
 
     using ShadowArgumentList = std::vector<std::optional<ShadowArgument>>;
 
-    double mWarmupSeconds = 1.0;
-    double mBenchmarkSeconds = 1.0;
-
-    std::vector<cudaEvent_t> mStartEvents;
-    std::vector<cudaEvent_t> mEndEvents;
-
-    std::chrono::high_resolution_clock::time_point mCPUStart;
-
-    int* mDeviceDummyMemory = nullptr;
-    int mL2CacheSize;
-    unsigned* mDeviceErrorCounter = nullptr;
-    bool mNVTXEnabled = false;
-    bool mDiscardCache = true;
-    std::uint64_t mSeed = -1;
-    std::vector<Expected> mExpectedOutputs;
-
+    std::vector<std::vector<Expected>> mExpectedOutputs;
     std::ofstream mOutputFile;
 
-    static ShadowArgumentList make_shadow_args(const nb::tuple& args, cudaStream_t stream);
+    static ShadowArgumentList make_shadow_args(const nb::tuple& args, std::size_t first_input_idx, cudaStream_t stream);
+    static Expected parse_expected_spec(const nb::handle& obj);
 
     void nvtx_push(const char* name);
     void nvtx_pop();
-
     void validate_result(Expected& expected, const nb_cuda_array& result, unsigned seed, cudaStream_t stream);
     void clear_cache(cudaStream_t stream);
 };

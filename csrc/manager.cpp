@@ -52,14 +52,17 @@ BenchmarkManager::~BenchmarkManager() {
     cudaFree(mDeviceErrorCounter);
     for (auto& event : mStartEvents) cudaEventDestroy(event);
     for (auto& event : mEndEvents) cudaEventDestroy(event);
-    for (auto& exp: mExpectedOutputs) cudaFree(exp.Value);
+    for (auto& expected_per_test : mExpectedOutputs) {
+        for (auto& exp : expected_per_test) cudaFree(exp.Value);
+    }
 }
 
-std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats) {
+std::tuple<std::vector<nb::tuple>, std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setup_benchmark(const nb::callable& generate_test_case, const nb::dict& kwargs, int repeats) {
     std::mt19937_64 rng(mSeed);
     std::uniform_int_distribution<std::uint64_t> dist(0, std::numeric_limits<std::uint64_t>::max());
     // generate one more input to handle warmup
-    std::vector<nb::tuple> kernel_args(repeats + 1);
+    std::vector<nb::tuple> call_args(repeats + 1);
+    std::vector<nb::tuple> outputs(repeats + 1);
     std::vector<nb::tuple> expected(repeats + 1);
     for (int i = 0; i < repeats + 1; i++) {
         // create new copy of the kwargs dict
@@ -74,23 +77,41 @@ std::pair<std::vector<nb::tuple>, std::vector<nb::tuple>> BenchmarkManager::setu
         call_kwargs["seed"] = dist(rng);
 
         auto gen = nb::cast<nb::tuple>(generate_test_case(**call_kwargs));
-        kernel_args[i] = nb::cast<nb::tuple>(gen[0]);
-        expected[i] = nb::cast<nb::tuple>(gen[1]);
+        if (gen.size() != 3) {
+            throw std::runtime_error("generate_test_case must return a 3-tuple: (inputs, outputs, expected)");
+        }
+
+        nb::tuple inputs = nb::cast<nb::tuple>(gen[0]);
+        outputs[i] = nb::cast<nb::tuple>(gen[1]);
+        expected[i] = nb::cast<nb::tuple>(gen[2]);
+
+        if (outputs[i].size() == 0) {
+            throw std::runtime_error("outputs tuple must not be empty");
+        }
+        if (expected[i].size() != outputs[i].size()) {
+            throw std::runtime_error("expected tuple size must match outputs tuple size");
+        }
+
+        PyObject* combined = PySequence_Concat(outputs[i].ptr(), inputs.ptr());
+        if (combined == nullptr) {
+            throw nb::python_error();
+        }
+        call_args[i] = nb::steal<nb::tuple>(combined);
     }
-    return std::make_pair(std::move(kernel_args), std::move(expected));
+    return std::make_tuple(std::move(call_args), std::move(outputs), std::move(expected));
 }
 
 bool can_convert_to_tensor(nb::handle obj) {
     return nb::isinstance<nb_cuda_array>(obj);
 }
 
-auto BenchmarkManager::make_shadow_args(const nb::tuple& args, cudaStream_t stream) -> std::vector<std::optional<ShadowArgument>> {
+auto BenchmarkManager::make_shadow_args(const nb::tuple& args, std::size_t first_input_idx, cudaStream_t stream) -> std::vector<std::optional<ShadowArgument>> {
     std::vector<std::optional<ShadowArgument>> shadow_args(args.size());
     int nargs = args.size();
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<unsigned> canary_seed_dist(0,  0xffffffff);
-    for (int i = 1; i < nargs; i++) {
+    for (std::size_t i = first_input_idx; i < static_cast<std::size_t>(nargs); i++) {
         if (can_convert_to_tensor(args[i])) {
             nb_cuda_array arr = nb::cast<nb_cuda_array>(args[i]);
             void* shadow;
@@ -131,6 +152,39 @@ void BenchmarkManager::validate_result(Expected& expected, const nb_cuda_array& 
     }
 }
 
+BenchmarkManager::Expected BenchmarkManager::parse_expected_spec(const nb::handle& obj) {
+    nb_cuda_array expected_array;
+    auto mode = BenchmarkManager::Expected::ExactMatch;
+    float rtol = 0.f;
+    float atol = 0.f;
+
+    if (nb::isinstance<nb_cuda_array>(obj)) {
+        expected_array = nb::cast<nb_cuda_array>(obj);
+    } else {
+        nb::tuple expected_tuple = nb::cast<nb::tuple>(obj);
+        if (expected_tuple.size() == 0) {
+            throw std::runtime_error("Expected spec tuple must not be empty");
+        }
+        if (expected_tuple.size() != 1 && expected_tuple.size() != 3) {
+            throw std::runtime_error("Expected spec tuple must have size 1 or 3");
+        }
+        expected_array = nb::cast<nb_cuda_array>(expected_tuple[0]);
+        if (expected_tuple.size() == 3) {
+            rtol = nb::cast<float>(expected_tuple[1]);
+            atol = nb::cast<float>(expected_tuple[2]);
+            mode = BenchmarkManager::Expected::ApproxMatch;
+        }
+    }
+
+    // copy expected values into memory not owned by torch, then wipe original
+    void* copy_mem;
+    CUDA_CHECK(cudaMalloc(&copy_mem, expected_array.nbytes()));
+    CUDA_CHECK(cudaMemcpy(copy_mem, expected_array.data(), expected_array.nbytes(), cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemset(expected_array.data(), 0, expected_array.nbytes()));
+
+    return {mode, copy_mem, expected_array.nbytes(), expected_array.dtype(), atol, rtol};
+}
+
 void BenchmarkManager::clear_cache(cudaStream_t stream) {
     ::clear_cache(mDeviceDummyMemory, 2 * mL2CacheSize, mDiscardCache, stream);
 }
@@ -155,47 +209,50 @@ BenchmarkManager::ShadowArgument& BenchmarkManager::ShadowArgument::operator=(Sh
     return *this;
 }
 
-void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream) {
+void BenchmarkManager::do_bench_py(
+    const nb::callable& kernel_generator,
+    const std::vector<nb::tuple>& args,
+    const std::vector<nb::tuple>& output_tuples,
+    const std::vector<nb::tuple>& expected,
+    cudaStream_t stream
+) {
     if (args.size() < 5) {
         throw std::runtime_error("Not enough test cases to run benchmark");
     }
-    if (expected.size() != args.size()) {
-        throw std::runtime_error("Expected results and test case list do not have the same length");
+    if (output_tuples.size() != args.size() || expected.size() != args.size()) {
+        throw std::runtime_error("Expected results, outputs, and test case lists do not have the same length");
     }
     int calls = args.size() - 1;
 
-    // extract relevant infos from args and expected
-    // by convention, the first arg is the output tensor.
-    // TODO handle multiple outputs
-    std::vector<nb_cuda_array> outputs(args.size());
+    // extract relevant infos from outputs and expected
+    std::vector<std::vector<nb_cuda_array>> outputs(args.size());
     for (int i = 0; i < args.size(); i++) {
-        outputs.at(i) = nb::cast<nb_cuda_array>(args.at(i)[0]);
+        const nb::tuple& output_tuple = output_tuples.at(i);
+        outputs.at(i).reserve(output_tuple.size());
+        for (int j = 0; j < output_tuple.size(); j++) {
+            outputs.at(i).push_back(nb::cast<nb_cuda_array>(output_tuple[j]));
+        }
     }
 
     // Generate "shadow" copies of input arguments
     std::vector<ShadowArgumentList> shadow_arguments;
-    for (const auto & arg : args) {
-        shadow_arguments.emplace_back(make_shadow_args(arg, stream));
+    for (int i = 0; i < args.size(); i++) {
+        shadow_arguments.emplace_back(make_shadow_args(args.at(i), outputs.at(i).size(), stream));
     }
 
+    for (auto& expected_per_test : mExpectedOutputs) {
+        for (auto& exp : expected_per_test) cudaFree(exp.Value);
+    }
+    mExpectedOutputs.clear();
     mExpectedOutputs.resize(args.size());
     for (int i = 0; i < args.size(); i++) {
         const nb::tuple& expected_tuple = expected.at(i);
-        nb_cuda_array expected_array = nb::cast<nb_cuda_array>(expected_tuple[0]);
-
-        // make a copy of the expected result and put it in memory not owned by torch; overwrite the original
-        // so it cannot be read by cheating solutions.
-        void* copy_mem;
-        CUDA_CHECK(cudaMalloc(&copy_mem, expected_array.nbytes()));
-        CUDA_CHECK(cudaMemcpy(copy_mem, expected_array.data(), expected_array.nbytes(), cudaMemcpyDeviceToDevice));
-        CUDA_CHECK(cudaMemset(expected_array.data(), 0, expected_array.nbytes()));
-
-        if (expected.at(i).size() == 1) {
-            mExpectedOutputs.at(i) = {Expected::ExactMatch, copy_mem, expected_array.nbytes(), expected_array.dtype(), 0.f, 0.f};
-        } else {
-            float rtol = nb::cast<float>(expected_tuple[1]);
-            float atol = nb::cast<float>(expected_tuple[2]);
-            mExpectedOutputs.at(i) = {Expected::ApproxMatch, copy_mem, expected_array.nbytes(), expected_array.dtype(), atol, rtol};
+        if (expected_tuple.size() != outputs.at(i).size()) {
+            throw std::runtime_error("Expected tuple size must match outputs tuple size");
+        }
+        mExpectedOutputs.at(i).reserve(expected_tuple.size());
+        for (int j = 0; j < expected_tuple.size(); j++) {
+            mExpectedOutputs.at(i).push_back(parse_expected_spec(expected_tuple[j]));
         }
     }
 
@@ -324,7 +381,9 @@ void BenchmarkManager::do_bench_py(const nb::callable& kernel_generator, const s
         CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
         // immediately after the kernel, launch the checking code; if there is some unsynced work done on another stream,
         // this increases the chance of detection.
-        validate_result(mExpectedOutputs.at(test_id), outputs.at(test_id), check_seed_generator(rng), stream);
+        for (std::size_t j = 0; j < outputs.at(test_id).size(); j++) {
+            validate_result(mExpectedOutputs.at(test_id).at(j), outputs.at(test_id).at(j), check_seed_generator(rng), stream);
+        }
     }
     nvtx_pop();
 
