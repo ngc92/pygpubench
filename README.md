@@ -2,80 +2,131 @@
 
 # PyGPUBench
 
-Utilities for benchmarking low-latency CUDA kernels in an _adversarial_ setting.
-Contrary to many existing benchmarking tools, which generally assume a cooperative kernel that
-can be tested and benchmarked independently, this library tries to defend against kernels that
-try to exploit benchmarking flaws to receive higher scores.
+PyGPUBench is a CUDA microbenchmark harness for **untrusted kernels**.
 
-## Usage
-To benchmark a kernel, two ingredients are needed:
-1. A function that _generates_ the kernel. This function takes no arguments and returns a callable. It is important that
-   untrusted code, e.g., the user-supplied python module, is only imported inside this function.
-2. A function that generates test/benchmark inputs. This function takes a tuple of configuration parameters, as well as an
-   integer to seed the rng, as arguments. It returns two tuples: The first contains the inputs for the kernel and will
-   be used to call the kernel function, and the second contains the expected output and the required absolute and relative tolerance.
+Most benchmarking scripts assume the kernel under test is cooperative: it computes the right result, runs on the expected stream, and does not introspect the harness. That assumption breaks if submissions are generated to maximize benchmark score instead of correctness.
+
+This project focuses on that adversarial setting.
+
+## What this evaluates (and what it does not)
+
+PyGPUBench answers a narrow question:
+
+> "Given this kernel API and these test generators, can this kernel produce correct outputs while measured honestly under short-latency CUDA timing?"
+
+It does **not** sandbox arbitrary code execution. User code still runs in-process and can execute Python, PyTorch, and CUDA runtime calls.
+
+So the goal is not "perfect isolation". The goal is to make common reward-hacking strategies fail, and to make successful cheating require substantially more sophistication.
+
+## Real attack vectors in this setting
+
+When kernel code is untrusted, these are practical attack classes:
+
+- **Answer leakage / answer copying**
+  - Read expected outputs from Python objects and copy them into the output tensor.
+- **Validator tampering**
+  - Corrupt or reset state used by correctness checking (for example, a GPU-side error counter).
+- **Result-channel tampering**
+  - Rewrite benchmark output after measurement but before the parent process reads it.
+- **Timing-shape manipulation**
+  - Detect warmup/measurement phases and bias iteration count or timing windows.
+- **Stream/order races**
+  - Launch work on different streams so measured events do not reflect true compute.
+
+We document these hacks under [exploits/](exploits/)
+
+## What PyGPUBench does differently
+
+Compared with a typical Python+CUDA benchmarking loop, PyGPUBench adds defenses in C++ around the measurement path:
+
+1. **Benchmark core in compiled extension**
+   - Timing, cache management, and validation orchestration run in `csrc/manager.cpp`, not pure Python.
+
+2. **Subprocess boundary (`do_bench_isolated`)**
+   - The public API runs untrusted code in a spawned child process and only parses a result file in the parent.
+
+3. **Expected-output shadowing**
+   - Expected tensors are copied to raw `cudaMalloc` memory and original tensor storage is zeroed before user code is imported.
+   - This blocks straightforward `gc.get_objects()` answer-sheet attacks.
+
+4. **Input shadowing + canary repair window**
+   - Inputs are staged in hidden device buffers, restored before each run, L2 is cleared, then sparse canaries are repaired immediately before launch.
+   - This reduces opportunities to exploit stale-cache behavior.
+
+5. **Immediate post-kernel validation**
+   - Correctness check kernels launch right after the user kernel on the benchmark stream.
+   - Test order is randomized to make selective late-write strategies less reliable.
+
+6. **Basic anti-introspection hardening**
+   - `PR_SET_DUMPABLE=0` and `PR_SET_NO_NEW_PRIVS=1` are set before user kernel generation.
+
+## Current limits (important)
+
+This suite is hardened, not airtight. Known limitations include:
+
+- User code still shares process and GPU address space with the harness.
+- The GPU error counter is currently a plain device allocation; this is a meaningful tampering target.
+- Output-file integrity is not cryptographically signed.
+- Warmup uses repeated calls on the same warmup input, which can be pattern-detected.
+
+
+## Quick start
 
 ```python
 import torch
 import pygpubench
 
-def generate_input(*args):
-    ...
 
-def reference_kernel(args):
-    ...
+def generate_test_case(size: int, seed: int):
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
 
-def generate_test_case(args, seed):
-    x, y = generate_input(*args, seed)
+    x = torch.rand(size, size, 3, device="cuda", dtype=torch.float32, generator=gen).contiguous()
+    y = torch.empty(size, size, device="cuda", dtype=torch.float32).contiguous()
+
     expected = torch.empty_like(y)
-    reference_kernel((expected, x))
+    w = torch.tensor([0.2989, 0.5870, 0.1140], device=x.device, dtype=x.dtype)
+    expected[...] = torch.sum(x * w, dim=-1)
+
+    # kernel inputs, then (expected, rtol, atol)
     return (y, x), (expected, 1e-6, 1e-6)
 
 
 def kernel_generator():
-    import submission
+    import submission  # import untrusted module here
     return submission.kernel
 
-res = pygpubench.do_bench_isolated(kernel_generator, generate_test_case,  (1024,), 100, 5, discard=True)
+
+res = pygpubench.do_bench_isolated(
+    kernel_generator,
+    generate_test_case,
+    {"size": 1024},
+    repeats=100,
+    seed=5,
+    discard=True,
+)
+
 print("❌" if res.errors else "✅", pygpubench.basic_stats(res.time_us))
 ```
-For the full example see [grayscale.py](test/grayscale.py)
 
+See `test/grayscale.py` for a complete runnable example.
 
-## Implementation
-Unfortunately, any benchmarking tool written in python is inherently vulnerable to monkeypatching
-and `inpect`-based manipulation of its variables by its callees. 
-Therefore, PyGPUBench implements its main benchmarking logic in a compiled C++ extension. 
-While this still leaves vulnerabilities - the code is running in the same address space, after all –
-it makes attacks require much more sophistication. Running in a separate process fundamentally
-clashes with the desire to benchmark very short kernels; cuda events must be recorded in the same
-process as the kernel. Fortunately, we can assume that a reward-hacking LLM is still rather 
-unlikely to produce a compiled extension that runs sophisticated low-level exploits.
+## API surface
 
-Note that, as soon as any user code is executed, the entire python runtime becomes untrustworthy.
-Consequently, benchmark results are not returned to python, but instead written to a file. The
-name of this file is passed as an argument to the benchmarking function, and the file is unlinked
-before the user code is called, making it impossible to reopen this file.
-The `do_bench_isolated` function is designed to streamline this process: It automates creating
-the temporary file, spawning a new python process to handle benchmarking and reading the
-results back into python (the original, untainted process).
+- `do_bench_isolated(...)`
+  - Recommended path. Spawns a subprocess and returns parsed benchmark results.
+- `do_bench_impl(...)`
+  - Lower-level call that runs in the current process.
+- `basic_stats(time_us)`
+  - Convenience stats for completed runs.
 
-Thus, the library provides two main interfaces to benchmarking:
-`do_bench_impl` runs benchmarking directly in the current process,
-`do_bench_isolated` runs it in a separate process and automaticallly handles 
-I/O through a temporary file.
+## Running exploit regression tests
 
-Additional measures to mitigate benchmark cheating are that benchmark inputs are generated before any benchmark is run,
-but then moved to a GPU memory location unknown to `torch` (allocated directly with cudaMalloc in C++). Only before
-the actual kernel is launched do we copy the inputs back to their original locations. Problematically, this would put the
-inputs into L2 cache, which we want to avoid. This means that between the copy and the kernel launch, there has to be another
-kernel that clears the L2 cache, opening a window of opportunity for cheating. To minimize the duration of vulnerability,
-we put a small fraction of random canaries into the input data, that is, a subset of memory location contains wrong data.
-Only after L2 clearing do we fix up these values; this pulls them into L2 cache, but since they make up less than 1% of
-the total data, we consider this an acceptable tradeoff.
+Use the exploit suite to validate assumptions on your machine:
 
-Similarly, after the kernel is finished, we directly launch the testing kernel with a programmatically-dependent launch,
-again to minimize the window of opportunity for cheating by writing results from a different stream. This could have a
-small effect on performance, as during the tail of the user kernel blocks of the test kernel are already put on the SMs
-and generate memory traffic. In the checking kernel, the order in which blocks are checked is randomized, so that it is
-not a viable strategy to only write the later blocks of the result from an unsynchronized stream.
+```bash
+cd exploits
+python run_all.py
+```
+
+This reports which cheating strategies are currently blocked vs still viable.
