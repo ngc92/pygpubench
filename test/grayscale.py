@@ -33,15 +33,13 @@ def generate_test_case(**kwargs):
     x, y = generate_input(**kwargs)
     expected = torch.empty_like(y)
     reference_kernel((expected, x))
-    return (y, x), (expected, 1e-6, 1e-6)
+    return (x,), (y,), ((expected, 1e-6, 1e-6),)
 
 
 def kernel_generator(kernel):
     import submission
     return getattr(submission, kernel)
 
-
-#void do_bench(std::string target_file, const nb::callable& kernel_generator, const nb::callable& test_generator, const nb::tuple& test_args, int repeats, std::uintptr_t stream) {
 if __name__ == "__main__":
     kernels = ["valid_custom_kernel_eager", "valid_custom_kernel_compiled", "valid_custom_kernel_stream"]
     for kernel in kernels:

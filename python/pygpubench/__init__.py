@@ -21,6 +21,7 @@ __all__ = [
     "KernelFunction",
     "KernelGeneratorInterface",
     "TestGeneratorInterface",
+    "ExpectedSpec",
     "ExpectedResult",
 ]
 
@@ -32,7 +33,8 @@ def do_bench_impl(out_file: str, kernel_generator: KernelGeneratorInterface, tes
     Benchmarks the kernel returned by `kernel_generator` against the test case returned by `test_generator`.
     :param out_file: File in which to write the benchmark results.
     :param kernel_generator: A function that takes no arguments and returns a kernel function.
-    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case; i.e., a tuple of (input, expected)
+    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case;
+    i.e., a tuple of (inputs, outputs, expected).
     :param test_args: keyword arguments to be passed to `test_generator`. Seed will be generated automatically.
     :param repeats: Number of times to repeat the benchmark. `test_generator` will be called `repeats` times.
     :param stream: Cuda stream on which to run the benchmark. If not given, torch's current stream is selected

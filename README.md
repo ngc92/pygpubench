@@ -11,32 +11,34 @@ try to exploit benchmarking flaws to receive higher scores.
 To benchmark a kernel, two ingredients are needed:
 1. A function that _generates_ the kernel. This function takes no arguments and returns a callable. It is important that
    untrusted code, e.g., the user-supplied python module, is only imported inside this function.
-2. A function that generates test/benchmark inputs. This function takes a tuple of configuration parameters, as well as an
-   integer to seed the rng, as arguments. It returns two tuples: The first contains the inputs for the kernel and will
-   be used to call the kernel function, and the second contains the expected output and the required absolute and relative tolerance.
+2. A function that generates test/benchmark inputs. This function takes configuration parameters and
+   an integer seed for rng as arguments. It returns three tuples:
+   - inputs: kernel inputs
+   - outputs: output tensors passed to the kernel
+   - expected: one expected spec per output tensor
 
 ```python
 import torch
 import pygpubench
 
-def generate_input(*args):
+def generate_input(size, seed):
     ...
 
 def reference_kernel(args):
     ...
 
-def generate_test_case(args, seed):
-    x, y = generate_input(*args, seed)
+def generate_test_case(size, seed):
+    x, y = generate_input(size, seed)
     expected = torch.empty_like(y)
     reference_kernel((expected, x))
-    return (y, x), (expected, 1e-6, 1e-6)
+    return (x,), (y,), ((expected, 1e-6, 1e-6),)
 
 
 def kernel_generator():
     import submission
     return submission.kernel
 
-res = pygpubench.do_bench_isolated(kernel_generator, generate_test_case,  (1024,), 100, 5, discard=True)
+res = pygpubench.do_bench_isolated(kernel_generator, generate_test_case, {"size": 1024}, 100, 5, discard=True)
 print("❌" if res.errors else "✅", pygpubench.basic_stats(res.time_us))
 ```
 For the full example see [grayscale.py](test/grayscale.py)
