@@ -1,6 +1,8 @@
 import dataclasses
+import functools
 import math
 import multiprocessing as mp
+import pickle
 import tempfile
 import traceback
 
@@ -120,6 +122,16 @@ def basic_stats(time_us: list[float]) -> BenchmarkStats:
     return BenchmarkStats(runs, len(time_us), fastest, slowest, median, mean, std, err)
 
 
+def _test_generator_from_file(*, seed, base_test_generator, args_file, repeats, state):
+    with open(args_file, "rb") as f:
+        test_args = pickle.load(f)
+    result = base_test_generator(**test_args, seed=seed)
+    state["calls"] += 1
+    if state["calls"] == repeats + 1:
+        Path(args_file).unlink(missing_ok=True)
+    return result
+
+
 def do_bench_isolated(
         kernel_generator: KernelGeneratorInterface,
         test_generator: TestGeneratorInterface,
@@ -139,6 +151,18 @@ def do_bench_isolated(
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.tsv') as f:
         result_file = f.name
 
+    with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.args') as f:
+        args_file = f.name
+        pickle.dump(test_args, f)
+
+    wrapped_test_generator = functools.partial(
+        _test_generator_from_file,
+        base_test_generator=test_generator,
+        args_file=args_file,
+        repeats=repeats,
+        state={"calls": 0},
+    )
+
     try:
         # open file before running subprocess; process will unlink
         with open(result_file, 'r') as f:
@@ -150,8 +174,8 @@ def do_bench_isolated(
                 args=(
                     result_file,
                     kernel_generator,
-                    test_generator,
-                    test_args,
+                    wrapped_test_generator,
+                    {},
                     repeats,
                     seed,
                     None,
@@ -192,3 +216,4 @@ def do_bench_isolated(
 
     finally:
         Path(result_file).unlink(missing_ok=True)
+        Path(args_file).unlink(missing_ok=True)
