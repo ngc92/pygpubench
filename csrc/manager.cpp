@@ -16,8 +16,6 @@
 #include <nvtx3/nvToolsExt.h>
 #include <nanobind/stl/string.h>
 
-#include <sys/prctl.h>
-
 static constexpr std::size_t ArenaSize = 2 * 1024 * 1024;
 
 extern void clear_cache(void* dummy_memory, int size, bool discard, cudaStream_t stream);

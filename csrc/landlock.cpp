@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Erik Schultheis
-// All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //
 
 #include <cstdint>
@@ -87,6 +87,9 @@ void install_landlock() {
                      #ifdef LANDLOCK_ACCESS_FS_TRUNCATE
                      LANDLOCK_ACCESS_FS_TRUNCATE     |
                      #endif
+                     #ifdef LANDLOCK_ACCESS_FS_REFER
+                     LANDLOCK_ACCESS_FS_REFER        |
+                     #endif
                      0;
 
     struct landlock_ruleset_attr ruleset_attr = {
@@ -103,7 +106,10 @@ void install_landlock() {
     allow_path(ruleset_fd, "/dev", RW); // needed for /dev/null etc, used e.g., by triton
 
     // Prevent ptrace and /proc/self/mem tampering
-    prctl(PR_SET_DUMPABLE, 0);
+    if (prctl(PR_SET_DUMPABLE, 0) < 0) {
+        throw std::system_error(errno, std::system_category(), "prctl(PR_SET_DUMPABLE)");
+    }
+
     // Prevent gaining privileges (if attacker tries setuid exploits)
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
         throw std::system_error(errno, std::system_category(), "prctl(PR_SET_NO_NEW_PRIVS)");

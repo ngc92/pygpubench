@@ -189,6 +189,7 @@ def do_bench_isolated(
             discard,
             nvtx,
             child_tb_conn,
+            landlock,
         ),
     )
 
