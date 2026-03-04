@@ -1,16 +1,19 @@
 import dataclasses
 import math
-import multiprocessing
 import multiprocessing as mp
 import os
 import traceback
 import secrets
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from . import _pygpubench
 from ._types import *
 from .utils import DeterministicContext
+
+if TYPE_CHECKING:
+    import multiprocessing.connection
+
 
 __all__ = [
     "do_bench_impl",
@@ -25,9 +28,9 @@ __all__ = [
 ]
 
 
-def do_bench_impl(out_fd: "multiprocessing.Pipe", signature: "multiprocessing.Pipe", qualname: str, test_generator: TestGeneratorInterface,
+def do_bench_impl(out_fd: "multiprocessing.connection.Connection", signature: "multiprocessing.connection.Connection", qualname: str, test_generator: TestGeneratorInterface,
                   test_args: dict, repeats: int, seed: int, stream: int = None, discard: bool = True,
-                  nvtx: bool = False, tb_conn: "multiprocessing.Pipe" = None):
+                  nvtx: bool = False, tb_conn: "multiprocessing.connection.Connection" = None):
     """
     Benchmarks the kernel referred to by `qualname` against the test case returned by `test_generator`.
     :param out_fd: Writable file descriptor to which benchmark results are written.
@@ -119,6 +122,13 @@ def basic_stats(time_us: list[float]) -> BenchmarkStats:
     return BenchmarkStats(runs, len(time_us), fastest, slowest, median, mean, std, err)
 
 
+def read_all(fd: int) -> str:
+    chunks = []
+    while chunk := os.read(fd, 65536):
+        chunks.append(chunk)
+    return (b"".join(chunks)).decode()
+
+
 def do_bench_isolated(
         qualname: str,
         test_generator: TestGeneratorInterface,
@@ -189,6 +199,7 @@ def do_bench_isolated(
     if process.is_alive():
         process.kill()
         process.join()
+        parent_tb_conn.close()
         result_parent.close()
         raise RuntimeError(
             f"Benchmark subprocess timed out after {timeout}s -- "
@@ -208,25 +219,37 @@ def do_bench_isolated(
         raise RuntimeError(msg)
 
     # Child has exited and closed its write-end, so this read is bounded.
-    raw = os.read(read_fd, _PIPE_CAPACITY)
+    response = read_all(read_fd)
     result_parent.close()
     parent_tb_conn.close()
 
     results = BenchmarkResult(None, [-1] * repeats, None, False)
     has_signature = False
-    for line in raw.decode().splitlines():
-        parts = line.strip().split('\t')
-        if len(parts) == 2 and parts[0].isdigit():
+    for line in response.splitlines():
+        line = line.strip()
+        if len(line) == 0:
+            continue
+        parts = line.split('\t')
+        if len(parts) != 2:
+            raise RuntimeError(f"Invalid benchmark output: {line}")
+        if has_signature:
+            raise RuntimeError(f"Unexpected output after signature: {line}")
+
+        if parts[0].isdigit():
             iteration = int(parts[0])
             time_us = float(parts[1])
+            if results.time_us[iteration] != -1:
+                raise RuntimeError(f"Duplicate iteration {iteration} in benchmark output")
             results.time_us[iteration] = time_us
         elif parts[0] == "event-overhead":
             results.event_overhead_us = float(parts[1].split()[0])
         elif parts[0] == "error-count":
+            if results.errors is not None:
+                raise RuntimeError(f"Duplicate error count in benchmark output")
             results.errors = int(parts[1])
         elif parts[0] == "signature":
             if signature != parts[1]:
-                raise AssertionError(f"Invalid signature")
+                raise RuntimeError("Benchmark subprocess output failed authentication: invalid signature")
             has_signature = True
     if not has_signature:
         raise RuntimeError(f"No signature found in output")

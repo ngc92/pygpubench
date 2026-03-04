@@ -59,19 +59,32 @@ BenchmarkManager::BenchmarkManager(int result_fd, int signature_fd, std::uint64_
     CUDA_CHECK(cudaMalloc(&mDeviceDummyMemory, 2 * mL2CacheSize));
     // allocate a large arena (2MiB) to place the error counter in
     CUDA_CHECK(cudaMalloc(&mDeviceErrorBase, ArenaSize));
-    mOutputFile = fdopen(result_fd, "w");
+    mOutputPipe = fdopen(result_fd, "w");
+    if (!mOutputPipe) {
+        throw std::runtime_error("Could not open output pipe");
+    }
+
     mNVTXEnabled = nvtx;
     mDiscardCache = discard;
     mSeed = seed;
     char sig_buf[256];
     FILE* sig_file = fdopen(signature_fd, "r");
-    fgets(sig_buf, sizeof(sig_buf), sig_file);
+    if (!sig_file) {
+        throw std::runtime_error("Could not open signature pipe");
+    }
+    if (!fgets(sig_buf, sizeof(sig_buf), sig_file)) {
+        fclose(sig_file);
+        throw std::runtime_error("Could not read signature");
+    }
     fclose(sig_file);
     mSignature = std::string(sig_buf);
 }
 
 BenchmarkManager::~BenchmarkManager() {
-    fclose(mOutputFile);
+    if (mOutputPipe) {
+        fclose(mOutputPipe);
+        mOutputPipe = nullptr;
+    }
     cudaFree(mDeviceDummyMemory);
     cudaFree(mDeviceErrorBase);
     for (auto& event : mStartEvents) cudaEventDestroy(event);
@@ -315,7 +328,7 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
     }
     std::sort(empty_event_times.begin(), empty_event_times.end());
     float median = empty_event_times.at(empty_event_times.size() / 2);
-    fprintf(mOutputFile, "event-overhead\t%f µs\n", median * 1000);
+    fprintf(mOutputPipe, "event-overhead\t%f µs\n", median * 1000);
 
     // create a randomized order for running the tests
     std::vector<int> test_order(actual_calls);
@@ -368,16 +381,16 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
     error_count -= mErrorCountShift;
 
     if (error_count > 0) {
-        fprintf(mOutputFile, "error-count\t%u\n", error_count);
+        fprintf(mOutputPipe, "error-count\t%u\n", error_count);
     }
 
     for (int i = 0; i < actual_calls; i++) {
         float duration;
         CUDA_CHECK(cudaEventElapsedTime(&duration, mStartEvents.at(i), mEndEvents.at(i)));
-        fprintf(mOutputFile, "%d\t%f\n", test_order.at(i) - 1, duration * 1000);
+        fprintf(mOutputPipe, "%d\t%f\n", test_order.at(i) - 1, duration * 1000);
     }
-    fprintf(mOutputFile, "signature\t%s", mSignature.c_str());
-    fflush(mOutputFile);
+    fprintf(mOutputPipe, "signature\t%s\n", mSignature.c_str());
+    fflush(mOutputPipe);
 
     // cleanup events
     for (auto& event : mStartEvents) CUDA_CHECK(cudaEventDestroy(event));

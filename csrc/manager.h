@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <cuda_runtime.h>
 #include <optional>
@@ -66,7 +67,7 @@ private:
     std::uint64_t mSeed = -1;
     std::vector<Expected> mExpectedOutputs;
 
-    FILE* mOutputFile;
+    FILE* mOutputPipe = nullptr;
     std::string mSignature;
 
     static ShadowArgumentList make_shadow_args(const nb::tuple& args, cudaStream_t stream);
