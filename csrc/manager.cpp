@@ -52,6 +52,12 @@ static nb::callable kernel_from_qualname(const std::string& qualname) {
     return nb::cast<nb::callable>(mod.attr(attr.c_str()));
 }
 
+static void trigger_gc() {
+    // Get the gc module and call collect()
+    nb::module_ gc = nb::module_::import_("gc");
+    (void)gc.attr("collect")();
+}
+
 BenchmarkParameters read_benchmark_parameters(int input_fd) {
     char buf[256];
     FILE* sig_file = fdopen(input_fd, "r");
@@ -256,6 +262,9 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
             mExpectedOutputs.at(i) = {Expected::ApproxMatch, copy_mem, expected_array.nbytes(), expected_array.dtype(), atol, rtol};
         }
     }
+
+    // clean up as much python state as we can
+    trigger_gc();
 
     // Prevent ptrace and /proc/self/mem tampering
     prctl(PR_SET_DUMPABLE, 0);
