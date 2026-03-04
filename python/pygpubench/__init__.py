@@ -72,6 +72,13 @@ class BenchmarkResult:
 
     @property
     def success(self):
+        """
+        Returns whether the benchmark was successful.
+        A successful benchmark means that _all_ iterations completed without errors.
+        In particular, for cases where we decide to run fewer iterations due to long running
+        times, we want to give feedback for the running times, but we cannot consider these
+        as valid benchmarks.
+        """
         return self.full and self.errors is None
 
 
@@ -167,10 +174,6 @@ def do_bench_isolated(
 
     parent_tb_conn, child_tb_conn = ctx.Pipe(duplex=False)
 
-    # Make write_fd inheritable before creating the Process so the spawned
-    # child receives it as a live, open fd.
-    os.set_inheritable(write_fd, True)
-
     process = ctx.Process(
         target=_do_bench_impl,
         args=(
@@ -189,6 +192,7 @@ def do_bench_isolated(
     process.start()
     child_tb_conn.close()
     result_child.close()
+    sig_r.close()
 
     process.join(timeout=timeout)
 

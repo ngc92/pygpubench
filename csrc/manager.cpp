@@ -8,6 +8,10 @@
 #include <chrono>
 #include <cuda_runtime.h>
 #include <optional>
+#include <system_error>
+#include <cstdlib>
+#include <cerrno>
+#include <limits>
 #include <random>
 #include <nvtx3/nvToolsExt.h>
 #include <nanobind/stl/string.h>
@@ -60,32 +64,49 @@ static void trigger_gc() {
 
 BenchmarkParameters read_benchmark_parameters(int input_fd) {
     char buf[256];
-    FILE* sig_file = fdopen(input_fd, "r");
-    if (!sig_file) {
-        throw std::runtime_error("Could not open signature pipe");
+    FILE* inp_file = fdopen(input_fd, "r");
+    if (!inp_file) {
+        throw std::system_error(errno, std::generic_category(), "Could not open input pipe");
     }
-    if (!fgets(buf, sizeof(buf), sig_file)) {
-        fclose(sig_file);
-        throw std::runtime_error("Could not read signature");
-    }
-    std::string signature = std::string(buf);
 
-    if (!fgets(buf, sizeof(buf), sig_file)) {
-        fclose(sig_file);
-        throw std::runtime_error("Could not read seed");
-    }
-    std::uint64_t seed = std::strtoull(buf, nullptr, 10);
+    auto read_line = [&](const char* field_name) {
+        if (!fgets(buf, sizeof(buf), inp_file)) {
+            int err = errno;
+            if (feof(inp_file)) {
+                fclose(inp_file);
+                throw std::runtime_error(std::string("Unexpected EOF reading ") + field_name);
+            }
+            fclose(inp_file);
+            throw std::system_error(err, std::generic_category(),
+                std::string("Could not read ") + field_name);
+        }
+    };
 
-
-    if (!fgets(buf, sizeof(buf), sig_file)) {
-        fclose(sig_file);
-        throw std::runtime_error("Could not read repeats");
+    read_line("signature");
+    std::string signature(buf);
+    if (signature.empty() || signature.back() != '\n') {
+        fclose(inp_file);
+        throw std::invalid_argument("Malformed or empty signature");
     }
+    signature.pop_back();
+
+    read_line("seed");
+    char* end;
+    std::uint64_t seed = std::strtoull(buf, &end, 10);
+    if (end == buf || (*end != '\n' && *end != '\0')) {
+        fclose(inp_file);
+        throw std::invalid_argument("Invalid seed: " + std::string(buf));
+    }
+
+    read_line("repeats");
     long repeats = std::strtol(buf, nullptr, 10);
-    if (repeats >= std::numeric_limits<int>::max()) {
-        throw std::runtime_error("Repeats exceeds 2^32");
+    if (repeats >= std::numeric_limits<int>::max() || repeats < 2) {
+        fclose(inp_file);
+        throw std::invalid_argument(
+            "Invalid number of repeats: " + std::to_string(repeats));
     }
 
+    fclose(inp_file);
     return {signature, seed, static_cast<int>(repeats)};
 }
 
