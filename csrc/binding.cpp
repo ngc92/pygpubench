@@ -15,7 +15,7 @@ void do_bench(int result_fd, int input_fd, const std::string& kernel_qualname, c
     auto config = read_benchmark_parameters(input_fd);
     BenchmarkManager mgr(result_fd, config.Signature, config.Seed, discard, nvtx, landlock);
     auto [args, expected] = mgr.setup_benchmark(nb::cast<nb::callable>(test_generator), test_kwargs,  config.Repeats);
-    mgr.do_bench_py(kernel_qualname, args, expected, reinterpret_cast<cudaStream_t>(stream));
+    mgr.do_bench_py(kernel_qualname, args, std::move(expected), reinterpret_cast<cudaStream_t>(stream));
 }
 
 

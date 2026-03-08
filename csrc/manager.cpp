@@ -240,7 +240,7 @@ BenchmarkManager::ShadowArgument& BenchmarkManager::ShadowArgument::operator=(Sh
     return *this;
 }
 
-void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream) {
+void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std::vector<nb::tuple>& args, std::vector<nb::tuple> expected, cudaStream_t stream) {
     if (args.size() < 5) {
         throw std::runtime_error("Not enough test cases to run benchmark");
     }
@@ -284,6 +284,11 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
         }
     }
 
+    // The benchmark loop only needs the unmanaged output copies after this point.
+    // Release Python-held expected tuples before importing untrusted code.
+    expected.clear();
+    expected.shrink_to_fit();
+
     // clean up as much python state as we can
     trigger_gc();
 
@@ -295,10 +300,14 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
     // after this, we cannot trust python anymore
     nb::callable kernel = kernel_from_qualname(kernel_qualname);
 
+    std::random_device warmup_rd;
+    std::mt19937 warmup_rng(warmup_rd());
+    std::uniform_int_distribution<int> warmup_dist(0, static_cast<int>(args.size()) - 1);
+
     // ok, first run for compilations etc
     nvtx_push("warmup");
     CUDA_CHECK(cudaDeviceSynchronize());
-    kernel(*args.at(0));
+    kernel(*args.at(warmup_dist(warmup_rng)));
     CUDA_CHECK(cudaDeviceSynchronize());
     nvtx_pop();
 
@@ -312,7 +321,7 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
         // this is only potentially problematic for in-place kernels;
         CUDA_CHECK(cudaDeviceSynchronize());
         clear_cache(stream);
-        kernel(*args.at(0));
+        kernel(*args.at(warmup_dist(warmup_rng)));
         CUDA_CHECK(cudaDeviceSynchronize());
         std::chrono::high_resolution_clock::time_point cpu_end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed_seconds = cpu_end - cpu_start;
