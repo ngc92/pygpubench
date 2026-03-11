@@ -41,9 +41,12 @@ __global__ void check_approx_match_kernel(unsigned* result, const Float* expecte
     cuda::atomic_ref<unsigned, cuda::thread_scope_device> res(*result);
     float a = static_cast<float>(expected[idx]);
 
-    // Nan is expected is wildcard for arbitrary results
-    if (isnan(a))
+    // NaN in the expected output must not behave as a wildcard.
+    // Treat it as a mismatch so malformed expectations fail closed.
+    if (isnan(a)) {
+        ++res;
         return;
+    }
 
 #if __CUDA_ARCH__ >= 900
     cudaGridDependencySynchronize();
