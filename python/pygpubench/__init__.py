@@ -23,6 +23,7 @@ __all__ = [
     "DeterministicContext",
     "KernelFunction",
     "TestGeneratorInterface",
+    "ExpectedSpec",
     "ExpectedResult",
 ]
 
@@ -35,7 +36,8 @@ def _do_bench_impl(out_fd: "multiprocessing.connection.Connection", in_fd: "mult
     :param out_fd: Writable file descriptor to which benchmark results are written.
     :param in_fd: Readable file descriptor that communicates benchmark configuration to the runner.
     :param qualname: Fully qualified name of the kernel object, e.g. ``my_package.my_module.kernel``.
-    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case; i.e., a tuple of (input, expected)
+    :param test_generator: A function that takes the test arguments (including a seed) and returns a test case;
+    i.e., a tuple of (inputs, outputs, expected).
     :param test_args: keyword arguments to be passed to `test_generator`. Seed will be generated automatically.
     :param discard: If true, then cache lines are discarded as part of cache clearing before each benchmark run.
     :param nvtx: Whether to enable NVTX markers for the benchmark. Mostly useful for debugging.

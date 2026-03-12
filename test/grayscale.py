@@ -32,7 +32,7 @@ def generate_test_case(**kwargs):
     x, y = generate_input(**kwargs)
     expected = torch.empty_like(y)
     reference_kernel((expected, x))
-    return (y, x), (expected, 1e-6, 1e-6)
+    return (x,), (y,), ((expected, 1e-6, 1e-6),)
 
 
 # note: can't enable landlock when running on modal :(
