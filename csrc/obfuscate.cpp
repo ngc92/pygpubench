@@ -22,7 +22,6 @@ ProtectablePage::ProtectablePage() {
     if (page == MAP_FAILED) {
         throw std::runtime_error("mmap failed");
     }
-    printf("%ld %ld %ld %ld\n", page, slow_hash(page), slow_unhash(slow_hash(page)), slow_hash(slow_unhash((std::uintptr_t)page)));
     Page = slow_hash(page);
 }
 
