@@ -240,7 +240,12 @@ BenchmarkManager::ShadowArgument& BenchmarkManager::ShadowArgument::operator=(Sh
     return *this;
 }
 
-void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std::vector<nb::tuple>& args, const std::vector<nb::tuple>& expected, cudaStream_t stream) {
+void BenchmarkManager::do_bench_py(
+        const std::string& kernel_qualname,
+        const std::vector<nb::tuple>& args,
+        const std::vector<nb::tuple>& expected,
+        cudaStream_t stream)
+{
     if (args.size() < 5) {
         throw std::runtime_error("Not enough test cases to run benchmark");
     }
@@ -356,24 +361,8 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
     mErrorCountShift = noise.at(offset);
 
     // dry run -- measure overhead of events
-    nvtx_push("dry-run");
-    // ensure that the GPU is busy for a short moment, so we can submit all the events
-    // before the GPU reaches them
-    clear_cache(stream);
-    for (int i = 0; i < DRY_EVENTS; i++) {
-        CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
-        CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
-    }
-    nvtx_pop();
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    std::vector<float> empty_event_times(DRY_EVENTS);
-    for (int i = 0; i < DRY_EVENTS; i++) {
-        CUDA_CHECK(cudaEventElapsedTime(empty_event_times.data() + i, mStartEvents.at(i), mEndEvents.at(i)));
-    }
-    std::sort(empty_event_times.begin(), empty_event_times.end());
-    float median = empty_event_times.at(empty_event_times.size() / 2);
-    fprintf(mOutputPipe, "event-overhead\t%f µs\n", median * 1000);
+    float median_event_time = measure_event_overhead(DRY_EVENTS, stream);
+    fprintf(mOutputPipe, "event-overhead\t%f µs\n", median_event_time * 1000);
 
     // create a randomized order for running the tests
     std::vector<int> test_order(actual_calls);
@@ -442,4 +431,25 @@ void BenchmarkManager::do_bench_py(const std::string& kernel_qualname, const std
     for (auto& event : mEndEvents) CUDA_CHECK(cudaEventDestroy(event));
     mStartEvents.clear();
     mEndEvents.clear();
+}
+
+float BenchmarkManager::measure_event_overhead(int repeats, cudaStream_t stream) {
+    nvtx_push("dry-run");
+    // ensure that the GPU is busy for a short moment, so we can submit all the events
+    // before the GPU reaches them
+    clear_cache(stream);
+    for (int i = 0; i < repeats; i++) {
+        CUDA_CHECK(cudaEventRecord(mStartEvents.at(i), stream));
+        CUDA_CHECK(cudaEventRecord(mEndEvents.at(i), stream));
+    }
+    nvtx_pop();
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<float> empty_event_times(repeats);
+    for (int i = 0; i < repeats; i++) {
+        CUDA_CHECK(cudaEventElapsedTime(empty_event_times.data() + i, mStartEvents.at(i), mEndEvents.at(i)));
+    }
+    std::sort(empty_event_times.begin(), empty_event_times.end());
+    float median = empty_event_times.at(empty_event_times.size() / 2);
+    return median;
 }
